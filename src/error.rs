@@ -27,6 +27,9 @@ pub enum SiwxError {
     #[error("Verification failed: {0}")]
     VerificationFailed(String),
 
+    #[error("Invalid public key: {0}")]
+    InvalidPublicKey(String),
+
     #[error("Crypto error: {0}")]
     CryptoError(String),
 

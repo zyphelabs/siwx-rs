@@ -1,4 +1,4 @@
-use crate::{Chain, SiwxError, SiwxMessage, SiwxResult, Signature, SignatureType};
+use crate::{Chain, SiwxError, SiwxMessage, SiwxResult, Signature, SignatureType, PublicKey};
 use async_trait::async_trait;
 use std::fmt;
 
@@ -10,7 +10,7 @@ pub trait SignatureVerifierBackend: Send + Sync {
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        public_key: &str,
+        public_key: &dyn PublicKey,
     ) -> SiwxResult<bool>;
 
     /// Get the chain this backend supports
@@ -46,11 +46,12 @@ impl SignatureVerifier {
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        public_key: &str,
+        public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
         // Validate message and signature first
         message.validate()?;
         signature.validate_format()?;
+        public_key.validate()?;
 
         // Check if message has expired
         if message.is_expired()? {
@@ -61,6 +62,13 @@ impl SignatureVerifier {
         if !message.is_valid_for_signing()? {
             return Err(SiwxError::InvalidMessageFormat(
                 "Message is not yet valid for signing".into(),
+            ));
+        }
+
+        // Check if public key supports the signature type
+        if !public_key.supports_signature_type(&signature.signature_type) {
+            return Err(SiwxError::VerificationFailed(
+                "Public key does not support the signature type".into(),
             ));
         }
 
@@ -114,7 +122,7 @@ impl SignatureVerifierBackend for EthereumSecp256k1Verifier {
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        public_key: &str,
+        public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
         match signature.signature_type {
             SignatureType::Eip191 => self.verify_eip191(message, signature, public_key).await,
@@ -144,7 +152,7 @@ impl EthereumSecp256k1Verifier {
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        public_key: &str,
+        public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
         // For now, return true as a placeholder
         // In a real implementation, you would use a proper crypto library
@@ -152,7 +160,7 @@ impl EthereumSecp256k1Verifier {
         println!("EIP-191 signature verification not fully implemented yet");
         println!("Message: {}", message.message_to_sign()?);
         println!("Signature: {}", signature.signature);
-        println!("Public key: {}", public_key);
+        println!("Public key: {}", public_key.as_string());
         Ok(true)
     }
 }
@@ -166,7 +174,7 @@ impl SignatureVerifierBackend for SolanaEd25519Verifier {
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        public_key: &str,
+        public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
         match signature.signature_type {
             SignatureType::Ed25519 => self.verify_ed25519(message, signature, public_key).await,
@@ -191,7 +199,7 @@ impl SolanaEd25519Verifier {
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        public_key: &str,
+        public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
         // For now, return true as a placeholder
         // In a real implementation, you would use a proper crypto library
@@ -199,7 +207,7 @@ impl SolanaEd25519Verifier {
         println!("Ed25519 signature verification not fully implemented yet");
         println!("Message: {}", message.message_to_sign()?);
         println!("Signature: {}", signature.signature);
-        println!("Public key: {}", public_key);
+        println!("Public key: {}", public_key.as_string());
         Ok(true)
     }
 }
@@ -232,7 +240,7 @@ impl VerifierFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SiwxMessage;
+    use crate::{SiwxMessage, PublicKeyFactory};
 
     #[tokio::test]
     async fn test_verifier_creation() {
@@ -263,5 +271,26 @@ mod tests {
         let sol_backend = SolanaEd25519Verifier;
         assert_eq!(sol_backend.supported_chain(), Chain::Solana);
         assert!(sol_backend.supported_signature_types().contains(&SignatureType::Ed25519));
+    }
+
+    #[tokio::test]
+    async fn test_verifier_with_public_key() {
+        let verifier = VerifierFactory::ethereum();
+        let message = SiwxMessage::new(
+            "example.com",
+            "0x1234567890123456789012345678901234567890",
+            "https://example.com/login",
+            "1",
+            "2024-01-01T00:00:00Z",
+            "nonce123",
+        );
+        let signature = Signature::eip191(
+            "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
+            "0x1234567890123456789012345678901234567890",
+        );
+        let public_key = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
+        
+        // This should not panic with the new public key abstraction
+        let _result = verifier.verify(&message, &signature, &public_key).await;
     }
 } 

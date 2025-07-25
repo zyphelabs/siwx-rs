@@ -9,9 +9,10 @@ A Rust library for implementing Sign-In with X (SIWX) authentication across mult
 - **Smart contract wallet support**: Designed for EOA and contract wallets
 - **Backend agnostic**: Use any blockchain library (ethers-rs, alloy-rs, etc.)
 - **Flexible signature verification**: Support for different signature formats
+- **Public key abstraction**: Trait-based design for extensible public key support
 - **Async/await support**: Modern Rust async patterns
-- **Comprehensive validation**: Message and signature validation
-- **Extensible architecture**: Easy to add new chains and signature types
+- **Comprehensive validation**: Message, signature, and public key validation
+- **Extensible architecture**: Easy to add new chains, signature types, and public key formats
 
 ## Supported Chains
 
@@ -74,7 +75,8 @@ async fn main() -> SiwxResult<()> {
         "0x1234567890123456789012345678901234567890",
     );
 
-    let is_valid = verifier.verify(&message, &signature, "0x1234567890123456789012345678901234567890").await?;
+    let public_key = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
+    let is_valid = verifier.verify(&message, &signature, &public_key).await?;
     println!("Signature valid: {}", is_valid);
 
     Ok(())
@@ -165,6 +167,93 @@ Nonce: 12345678-1234-1234-1234-123456789012
 Issued At: 2024-01-01T00:00:00Z
 ```
 
+## Public Key Abstraction
+
+The library provides a trait-based abstraction for public keys, making it easy to support different blockchain-specific public key formats and add new ones in the future.
+
+### Using Public Keys
+
+```rust
+use siwx_rs::prelude::*;
+
+// Create Ethereum public key
+let eth_public_key = PublicKeyFactory::ethereum(
+    "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
+);
+
+// Create Solana public key
+let sol_public_key = PublicKeyFactory::solana("11111111111111111111111111111112");
+
+// Auto-detect public key type
+let auto_detected = PublicKeyFactory::auto_detect("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890")?;
+
+// Chain-specific creation
+let eth_for_chain = PublicKeyFactory::for_chain(
+    "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
+    Chain::Ethereum
+);
+```
+
+### Public Key Validation
+
+```rust
+// Validate public key format
+eth_public_key.validate()?;
+
+// Check signature type support
+if eth_public_key.supports_signature_type(&SignatureType::Eip191) {
+    println!("Supports EIP-191 signatures");
+}
+
+// Get address from public key
+let address = eth_public_key.address()?;
+```
+
+### Extending for New Chains
+
+To add support for a new blockchain, implement the `PublicKey` trait:
+
+```rust
+use siwx_rs::{PublicKey, Chain, SiwxError, SiwxResult, SignatureType};
+
+struct BitcoinPublicKey {
+    key: String,
+}
+
+impl PublicKey for BitcoinPublicKey {
+    fn chain(&self) -> Chain {
+        Chain::Bitcoin // You'd need to add this to the Chain enum
+    }
+
+    fn as_string(&self) -> String {
+        self.key.clone()
+    }
+
+    fn as_bytes(&self) -> SiwxResult<Vec<u8>> {
+        // Implement Bitcoin-specific decoding
+        Ok(vec![])
+    }
+
+    fn validate(&self) -> SiwxResult<()> {
+        // Implement Bitcoin-specific validation
+        Ok(())
+    }
+
+    fn address(&self) -> SiwxResult<String> {
+        // Implement Bitcoin address derivation
+        Ok(self.key.clone())
+    }
+
+    fn supports_signature_type(&self, signature_type: &SignatureType) -> bool {
+        matches!(signature_type, SignatureType::Bitcoin) // You'd need to add this
+    }
+
+    fn key_type(&self) -> &'static str {
+        "secp256k1"
+    }
+}
+```
+
 ## Signature Verification
 
 ### Using Default Backends
@@ -174,6 +263,7 @@ Issued At: 2024-01-01T00:00:00Z
 let verifier = VerifierFactory::ethereum();
 
 // Verify signature
+let public_key = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
 let is_valid = verifier.verify(&message, &signature, &public_key).await?;
 ```
 
@@ -190,7 +280,7 @@ impl SignatureVerifierBackend for CustomEthereumBackend {
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        public_key: &str,
+        public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
         // Your custom verification logic here
         // You can use ethers-rs, alloy-rs, or any other library
@@ -231,7 +321,7 @@ impl SignatureVerifierBackend for Eip1271Backend {
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        public_key: &str,
+        public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
         // Call isValidSignature on the contract
         // This would typically involve an RPC call
@@ -290,6 +380,9 @@ Run the examples:
 ```bash
 # Basic usage
 cargo run --example basic_usage
+
+# Public key abstraction example
+cargo run --example public_key_usage
 
 # With specific features
 cargo run --example basic_usage --features ethereum

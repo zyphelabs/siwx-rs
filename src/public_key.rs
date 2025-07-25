@@ -1,0 +1,453 @@
+use crate::{Chain, SiwxError, SiwxResult};
+use serde::{Deserialize, Serialize};
+use std::fmt;
+
+/// Trait for blockchain-specific public key implementations
+pub trait PublicKey: Send + Sync + fmt::Debug + fmt::Display {
+    /// Get the chain this public key belongs to
+    fn chain(&self) -> Chain;
+
+    /// Get the public key as a string representation
+    fn as_string(&self) -> String;
+
+    /// Get the public key as bytes
+    fn as_bytes(&self) -> SiwxResult<Vec<u8>>;
+
+    /// Validate the public key format
+    fn validate(&self) -> SiwxResult<()>;
+
+    /// Get the address derived from this public key
+    fn address(&self) -> SiwxResult<String>;
+
+    /// Check if this public key can be used for the given signature type
+    fn supports_signature_type(&self, signature_type: &crate::SignatureType) -> bool;
+
+    /// Get the key type identifier
+    fn key_type(&self) -> &'static str;
+}
+
+/// Ethereum public key implementation
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EthereumPublicKey {
+    /// The public key in hex format (with or without 0x prefix)
+    pub key: String,
+    /// The derived address
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
+impl EthereumPublicKey {
+    /// Create a new Ethereum public key from hex string
+    pub fn new(key: impl Into<String>) -> Self {
+        let key = key.into();
+        Self {
+            key: Self::normalize_hex(&key),
+            address: None,
+        }
+    }
+
+    /// Create a new Ethereum public key with pre-computed address
+    pub fn with_address(key: impl Into<String>, address: impl Into<String>) -> Self {
+        let key = key.into();
+        Self {
+            key: Self::normalize_hex(&key),
+            address: Some(address.into()),
+        }
+    }
+
+    /// Normalize hex string to include 0x prefix
+    fn normalize_hex(hex: &str) -> String {
+        if hex.starts_with("0x") {
+            hex.to_string()
+        } else {
+            format!("0x{}", hex)
+        }
+    }
+
+    /// Derive Ethereum address from public key
+    fn derive_address(&self) -> SiwxResult<String> {
+        // In a real implementation, you would use a proper crypto library
+        // like ethers-rs or alloy-rs to derive the address from the public key
+        // For now, we'll return a placeholder
+        if let Some(ref addr) = self.address {
+            Ok(addr.clone())
+        } else {
+            // This is a simplified implementation - in practice you'd use proper keccak256
+            Err(SiwxError::InvalidPublicKey(
+                "Address derivation not implemented".into(),
+            ))
+        }
+    }
+}
+
+impl PublicKey for EthereumPublicKey {
+    fn chain(&self) -> Chain {
+        Chain::Ethereum
+    }
+
+    fn as_string(&self) -> String {
+        self.key.clone()
+    }
+
+    fn as_bytes(&self) -> SiwxResult<Vec<u8>> {
+        let hex_part = self.key.strip_prefix("0x").unwrap_or(&self.key);
+        hex::decode(hex_part)
+            .map_err(|e| SiwxError::InvalidPublicKey(format!("Invalid hex encoding: {}", e)))
+    }
+
+    fn validate(&self) -> SiwxResult<()> {
+        // Validate hex format
+        let hex_part = self.key.strip_prefix("0x").unwrap_or(&self.key);
+        if hex_part.len() != 130 {
+            return Err(SiwxError::InvalidPublicKey(format!(
+                "Ethereum public key must be 65 bytes (130 hex chars), got {}",
+                hex_part.len()
+            )));
+        }
+
+        if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(SiwxError::InvalidPublicKey(
+                "Ethereum public key must be valid hex".into(),
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn address(&self) -> SiwxResult<String> {
+        self.derive_address()
+    }
+
+    fn supports_signature_type(&self, signature_type: &crate::SignatureType) -> bool {
+        matches!(
+            signature_type,
+            crate::SignatureType::Eip191 | crate::SignatureType::Eip1271
+        )
+    }
+
+    fn key_type(&self) -> &'static str {
+        "secp256k1"
+    }
+}
+
+impl fmt::Display for EthereumPublicKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.key)
+    }
+}
+
+/// Solana public key implementation
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SolanaPublicKey {
+    /// The public key in base58 format
+    pub key: String,
+    /// The derived address (same as key for Solana)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub address: Option<String>,
+}
+
+impl SolanaPublicKey {
+    /// Create a new Solana public key from base58 string
+    pub fn new(key: impl Into<String>) -> Self {
+        let key = key.into();
+        Self {
+            key: key.clone(),
+            address: Some(key),
+        }
+    }
+
+    /// Create a new Solana public key with custom address
+    pub fn with_address(key: impl Into<String>, address: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            address: Some(address.into()),
+        }
+    }
+}
+
+impl PublicKey for SolanaPublicKey {
+    fn chain(&self) -> Chain {
+        Chain::Solana
+    }
+
+    fn as_string(&self) -> String {
+        self.key.clone()
+    }
+
+    fn as_bytes(&self) -> SiwxResult<Vec<u8>> {
+        #[cfg(feature = "solana")]
+        {
+            use bs58;
+            bs58::decode(&self.key)
+                .into_vec()
+                .map_err(|e| SiwxError::InvalidPublicKey(format!("Invalid base58 encoding: {}", e)))
+        }
+        #[cfg(not(feature = "solana"))]
+        {
+            Err(SiwxError::InvalidPublicKey(
+                "Solana feature not enabled".into(),
+            ))
+        }
+    }
+
+    fn validate(&self) -> SiwxResult<()> {
+        if self.key.is_empty() {
+            return Err(SiwxError::InvalidPublicKey(
+                "Solana public key cannot be empty".into(),
+            ));
+        }
+
+        // Basic base58 validation (alphanumeric without 0, O, I, l)
+        if !self
+            .key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() && !matches!(c, '0' | 'O' | 'I' | 'l'))
+        {
+            return Err(SiwxError::InvalidPublicKey(
+                "Solana public key must be valid base58".into(),
+            ));
+        }
+
+        // Validate length (Solana public keys are typically 32 bytes = ~44 base58 chars)
+        if self.key.len() < 32 || self.key.len() > 44 {
+            return Err(SiwxError::InvalidPublicKey(format!(
+                "Solana public key length should be between 32-44 chars, got {}",
+                self.key.len()
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn address(&self) -> SiwxResult<String> {
+        Ok(self.address.clone().unwrap_or_else(|| self.key.clone()))
+    }
+
+    fn supports_signature_type(&self, signature_type: &crate::SignatureType) -> bool {
+        matches!(signature_type, crate::SignatureType::Ed25519)
+    }
+
+    fn key_type(&self) -> &'static str {
+        "ed25519"
+    }
+}
+
+impl fmt::Display for SolanaPublicKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.key)
+    }
+}
+
+/// Enum wrapper for different public key types
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum PublicKeyEnum {
+    /// Ethereum public key
+    Ethereum(EthereumPublicKey),
+    /// Solana public key
+    Solana(SolanaPublicKey),
+}
+
+impl PublicKeyEnum {
+    /// Create an Ethereum public key
+    pub fn ethereum(key: impl Into<String>) -> Self {
+        Self::Ethereum(EthereumPublicKey::new(key))
+    }
+
+    /// Create a Solana public key
+    pub fn solana(key: impl Into<String>) -> Self {
+        Self::Solana(SolanaPublicKey::new(key))
+    }
+
+    /// Create a public key from string based on chain
+    pub fn from_string(key: impl Into<String>, chain: Chain) -> Self {
+        match chain {
+            Chain::Ethereum | Chain::EthereumTestnet => Self::ethereum(key),
+            Chain::Solana | Chain::SolanaTestnet => Self::solana(key),
+        }
+    }
+
+    /// Try to detect the chain from the key format
+    pub fn detect_chain(key: &str) -> Option<Chain> {
+        if key.starts_with("0x") && key.len() == 132 {
+            Some(Chain::Ethereum)
+        } else if key
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() && !matches!(c, '0' | 'O' | 'I' | 'l'))
+            && key.len() >= 32
+            && key.len() <= 44
+        {
+            Some(Chain::Solana)
+        } else {
+            None
+        }
+    }
+}
+
+impl PublicKey for PublicKeyEnum {
+    fn chain(&self) -> Chain {
+        match self {
+            PublicKeyEnum::Ethereum(_) => Chain::Ethereum,
+            PublicKeyEnum::Solana(_) => Chain::Solana,
+        }
+    }
+
+    fn as_string(&self) -> String {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.as_string(),
+            PublicKeyEnum::Solana(pk) => pk.as_string(),
+        }
+    }
+
+    fn as_bytes(&self) -> SiwxResult<Vec<u8>> {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.as_bytes(),
+            PublicKeyEnum::Solana(pk) => pk.as_bytes(),
+        }
+    }
+
+    fn validate(&self) -> SiwxResult<()> {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.validate(),
+            PublicKeyEnum::Solana(pk) => pk.validate(),
+        }
+    }
+
+    fn address(&self) -> SiwxResult<String> {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.address(),
+            PublicKeyEnum::Solana(pk) => pk.address(),
+        }
+    }
+
+    fn supports_signature_type(&self, signature_type: &crate::SignatureType) -> bool {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.supports_signature_type(signature_type),
+            PublicKeyEnum::Solana(pk) => pk.supports_signature_type(signature_type),
+        }
+    }
+
+    fn key_type(&self) -> &'static str {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.key_type(),
+            PublicKeyEnum::Solana(pk) => pk.key_type(),
+        }
+    }
+}
+
+impl fmt::Display for PublicKeyEnum {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => write!(f, "{}", pk),
+            PublicKeyEnum::Solana(pk) => write!(f, "{}", pk),
+        }
+    }
+}
+
+impl From<EthereumPublicKey> for PublicKeyEnum {
+    fn from(pk: EthereumPublicKey) -> Self {
+        Self::Ethereum(pk)
+    }
+}
+
+impl From<SolanaPublicKey> for PublicKeyEnum {
+    fn from(pk: SolanaPublicKey) -> Self {
+        Self::Solana(pk)
+    }
+}
+
+/// Factory for creating public keys
+pub struct PublicKeyFactory;
+
+impl PublicKeyFactory {
+    /// Create a public key for Ethereum
+    pub fn ethereum(key: impl Into<String>) -> PublicKeyEnum {
+        PublicKeyEnum::ethereum(key)
+    }
+
+    /// Create a public key for Solana
+    pub fn solana(key: impl Into<String>) -> PublicKeyEnum {
+        PublicKeyEnum::solana(key)
+    }
+
+    /// Create a public key for a specific chain
+    pub fn for_chain(key: impl Into<String>, chain: Chain) -> PublicKeyEnum {
+        PublicKeyEnum::from_string(key, chain)
+    }
+
+    /// Try to create a public key by auto-detecting the chain
+    pub fn auto_detect(key: impl Into<String>) -> SiwxResult<PublicKeyEnum> {
+        let key_str = key.into();
+        match PublicKeyEnum::detect_chain(&key_str) {
+            Some(chain) => Ok(PublicKeyEnum::from_string(key_str, chain)),
+            None => Err(SiwxError::InvalidPublicKey(
+                "Could not detect chain from public key format".into(),
+            )),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ethereum_public_key_creation() {
+        let pk = EthereumPublicKey::new("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
+        assert_eq!(pk.chain(), Chain::Ethereum);
+        assert_eq!(pk.key_type(), "secp256k1");
+        assert!(pk.validate().is_ok());
+    }
+
+    #[test]
+    fn test_solana_public_key_creation() {
+        let pk = SolanaPublicKey::new("11111111111111111111111111111112");
+        assert_eq!(pk.chain(), Chain::Solana);
+        assert_eq!(pk.key_type(), "ed25519");
+        assert!(pk.validate().is_ok());
+    }
+
+    #[test]
+    fn test_public_key_enum() {
+        let eth_pk = PublicKeyEnum::ethereum("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
+        assert_eq!(eth_pk.chain(), Chain::Ethereum);
+
+        let sol_pk = PublicKeyEnum::solana("11111111111111111111111111111112");
+        assert_eq!(sol_pk.chain(), Chain::Solana);
+    }
+
+    #[test]
+    fn test_chain_detection() {
+        assert_eq!(
+            PublicKeyEnum::detect_chain("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"),
+            Some(Chain::Ethereum)
+        );
+        assert_eq!(
+            PublicKeyEnum::detect_chain("11111111111111111111111111111112"),
+            Some(Chain::Solana)
+        );
+        assert_eq!(PublicKeyEnum::detect_chain("invalid"), None);
+    }
+
+    #[test]
+    fn test_factory() {
+        let pk = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
+        assert_eq!(pk.chain(), Chain::Ethereum);
+
+        let pk = PublicKeyFactory::solana("11111111111111111111111111111112");
+        assert_eq!(pk.chain(), Chain::Solana);
+    }
+
+    #[test]
+    fn test_signature_type_support() {
+        let eth_pk = EthereumPublicKey::new("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
+        assert!(eth_pk.supports_signature_type(&crate::SignatureType::Eip191));
+        assert!(eth_pk.supports_signature_type(&crate::SignatureType::Eip1271));
+        assert!(!eth_pk.supports_signature_type(&crate::SignatureType::Ed25519));
+
+        let sol_pk = SolanaPublicKey::new("11111111111111111111111111111112");
+        assert!(!sol_pk.supports_signature_type(&crate::SignatureType::Eip191));
+        assert!(!sol_pk.supports_signature_type(&crate::SignatureType::Eip1271));
+        assert!(sol_pk.supports_signature_type(&crate::SignatureType::Ed25519));
+    }
+}

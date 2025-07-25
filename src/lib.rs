@@ -37,19 +37,24 @@
 pub mod chain;
 pub mod error;
 pub mod message;
+pub mod public_key;
 pub mod signature;
 pub mod verifier;
 
 pub use chain::Chain;
 pub use error::{SiwxError, SiwxResult};
 pub use message::SiwxMessage;
+pub use public_key::{
+    EthereumPublicKey, PublicKey, PublicKeyEnum, PublicKeyFactory, SolanaPublicKey,
+};
 pub use signature::{Signature, SignatureType};
 pub use verifier::{SignatureVerifier, VerifierFactory};
 
 /// Re-export commonly used types
 pub mod prelude {
     pub use super::{
-        Chain, Signature, SignatureType, SignatureVerifier, SiwxError, SiwxMessage, SiwxResult,
+        Chain, EthereumPublicKey, PublicKey, PublicKeyEnum, PublicKeyFactory, Signature,
+        SignatureType, SignatureVerifier, SiwxError, SiwxMessage, SiwxResult, SolanaPublicKey,
         VerifierFactory,
     };
 }
