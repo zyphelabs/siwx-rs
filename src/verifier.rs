@@ -154,14 +154,65 @@ impl EthereumSecp256k1Verifier {
         signature: &Signature,
         public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
-        // For now, return true as a placeholder
-        // In a real implementation, you would use a proper crypto library
-        // like ethers-rs, alloy-rs, or implement the verification manually
-        println!("EIP-191 signature verification not fully implemented yet");
-        println!("Message: {}", message.message_to_sign()?);
-        println!("Signature: {}", signature.signature);
-        println!("Public key: {}", public_key.as_string());
-        Ok(true)
+        #[cfg(feature = "ethereum")]
+        {
+            use secp256k1::{ecdsa::RecoverableSignature, Message, PublicKey as Secp256k1PublicKey, Secp256k1};
+            use sha3::{Digest, Keccak256};
+
+            // Get the message to sign
+            let message_text = message.message_to_sign()?;
+            
+            // Create EIP-191 personal sign message format
+            let eth_signed_message = format!("\x19Ethereum Signed Message:\n{}{}", message_text.len(), message_text);
+            
+            // Hash the message
+            let message_hash = Keccak256::digest(eth_signed_message.as_bytes());
+            
+            // Parse the signature
+            let signature_bytes = signature.as_bytes()?;
+            if signature_bytes.len() != 65 {
+                return Err(SiwxError::InvalidSignature(
+                    "Ethereum signature must be exactly 65 bytes".into(),
+                ));
+            }
+            
+            // Extract r, s, and v components
+            let mut r_s_bytes = [0u8; 64];
+            r_s_bytes.copy_from_slice(&signature_bytes[0..64]);
+            let v = signature_bytes[64];
+            
+            // Normalize v to recovery ID (should be 27 or 28, but might be 0 or 1)
+            let recovery_id = if v >= 27 { v - 27 } else { v };
+            
+            // Create secp256k1 context
+            let secp = Secp256k1::new();
+            
+            // Create message from hash
+            let message_obj = Message::from_slice(&message_hash)
+                .map_err(|e| SiwxError::CryptoError(format!("Invalid message hash: {}", e)))?;
+            
+            // Create recoverable signature
+            let recoverable_sig = RecoverableSignature::from_compact(&r_s_bytes, secp256k1::ecdsa::RecoveryId::from_i32(recovery_id as i32).unwrap())
+                .map_err(|e| SiwxError::InvalidSignature(format!("Invalid signature format: {}", e)))?;
+            
+            // Recover the public key
+            let recovered_pubkey = secp.recover_ecdsa(&message_obj, &recoverable_sig)
+                .map_err(|e| SiwxError::CryptoError(format!("Public key recovery failed: {}", e)))?;
+            
+            // Convert public key to address (keccak256 of uncompressed pubkey bytes, take last 20 bytes)
+            let pubkey_bytes = recovered_pubkey.serialize_uncompressed();
+            let pubkey_hash = Keccak256::digest(&pubkey_bytes[1..]);  // Skip the 0x04 prefix
+            let recovered_address = format!("0x{}", hex::encode(&pubkey_hash[12..]));
+            
+            // Compare with expected signer address (normalize case)
+            Ok(recovered_address.to_lowercase() == signature.signer.to_lowercase())
+        }
+        #[cfg(not(feature = "ethereum"))]
+        {
+            Err(SiwxError::VerificationFailed(
+                "Ethereum feature not enabled".into(),
+            ))
+        }
     }
 }
 
@@ -201,14 +252,59 @@ impl SolanaEd25519Verifier {
         signature: &Signature,
         public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
-        // For now, return true as a placeholder
-        // In a real implementation, you would use a proper crypto library
-        // like solana-sdk or implement the verification manually
-        println!("Ed25519 signature verification not fully implemented yet");
-        println!("Message: {}", message.message_to_sign()?);
-        println!("Signature: {}", signature.signature);
-        println!("Public key: {}", public_key.as_string());
-        Ok(true)
+        #[cfg(feature = "solana")]
+        {
+            use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey, Verifier};
+            use bs58;
+
+            // Get the message to sign
+            let message_text = message.message_to_sign()?;
+            let message_bytes = message_text.as_bytes();
+            
+            // Parse the signature from base58
+            let signature_bytes = bs58::decode(&signature.signature)
+                .into_vec()
+                .map_err(|e| SiwxError::InvalidSignature(format!("Invalid base58 signature: {}", e)))?;
+            
+            if signature_bytes.len() != 64 {
+                return Err(SiwxError::InvalidSignature(
+                    "Ed25519 signature must be exactly 64 bytes".into(),
+                ));
+            }
+            
+            // Create Ed25519 signature from bytes
+            let ed25519_sig = Ed25519Signature::from_bytes(&signature_bytes.try_into().unwrap());
+            
+            // Parse the public key
+            let public_key_bytes = public_key.as_bytes()?;
+            if public_key_bytes.len() != 32 {
+                return Err(SiwxError::InvalidPublicKey(
+                    "Ed25519 public key must be exactly 32 bytes".into(),
+                ));
+            }
+            
+            // Create verifying key from bytes
+            let verifying_key = VerifyingKey::from_bytes(&public_key_bytes.try_into().unwrap())
+                .map_err(|e| SiwxError::InvalidPublicKey(format!("Invalid Ed25519 public key: {}", e)))?;
+            
+            // Verify the signature
+            match verifying_key.verify(message_bytes, &ed25519_sig) {
+                Ok(_) => {
+                    // Additional check: ensure the public key corresponds to the signer address
+                    let derived_address = bs58::encode(&public_key_bytes).into_string();
+                    Ok(derived_address == signature.signer)
+                },
+                Err(e) => {
+                    Err(SiwxError::VerificationFailed(format!("Ed25519 signature verification failed: {}", e)))
+                }
+            }
+        }
+        #[cfg(not(feature = "solana"))]
+        {
+            Err(SiwxError::VerificationFailed(
+                "Solana feature not enabled".into(),
+            ))
+        }
     }
 }
 
