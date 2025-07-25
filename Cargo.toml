@@ -1,0 +1,49 @@
+[package]
+name = "siwx-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Multi-chain Sign-In with X (SIWX) library supporting Ethereum and Solana"
+license = "MIT"
+repository = "https://github.com/your-org/siwx-rs"
+keywords = [
+    "authentication",
+    "blockchain",
+    "ethereum",
+    "solana",
+    "siwx",
+    "eip-4361",
+]
+categories = ["authentication", "cryptography"]
+
+[dependencies]
+# Core dependencies
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+regex = "1.0"
+hex = "0.4"
+async-trait = "0.1"
+
+# Crypto dependencies
+sha2 = "0.10"
+sha3 = "0.10"
+ed25519 = "2.0"
+ed25519-dalek = { version = "1.0", optional = true }
+secp256k1 = { version = "0.28", features = ["rand"] }
+
+# Optional blockchain-specific dependencies (can be enabled via features)
+alloy-primitives = { version = "0.1", optional = true }
+alloy-json-abi = { version = "0.1", optional = true }
+solana-sdk = { version = "1.16", optional = true }
+bs58 = { version = "0.5", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
+
+[features]
+default = []
+ethereum = ["alloy-primitives", "alloy-json-abi"]
+solana = ["solana-sdk", "bs58", "ed25519-dalek"]
+full = ["ethereum", "solana"]
