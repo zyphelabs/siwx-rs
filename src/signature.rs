@@ -94,15 +94,16 @@ impl Signature {
     /// Validate the signature format
     pub fn validate_format(&self) -> SiwxResult<()> {
         match self.signature_type {
-            SignatureType::Eip191 | SignatureType::Eip1271 => self.validate_ethereum_format(),
+            SignatureType::Eip191 => self.validate_ethereum_eip191_format(),
+            SignatureType::Eip1271 => self.validate_eip1271_format(),
             SignatureType::Ed25519 => self.validate_solana_format(),
             SignatureType::Custom(_) => Ok(()), // Custom types are not validated
         }
     }
 
     /// Validate Ethereum signature format
-    fn validate_ethereum_format(&self) -> SiwxResult<()> {
-        // Ethereum signatures should be hex-encoded and 65 bytes (130 hex chars)
+    fn validate_ethereum_eip191_format(&self) -> SiwxResult<()> {
+        // EIP-191 signatures must be 65 bytes (r,s,v) and hex-encoded
         if !self.signature.starts_with("0x") {
             return Err(SiwxError::InvalidSignature(
                 "Ethereum signature must start with 0x".into(),
@@ -117,13 +118,34 @@ impl Signature {
             )));
         }
 
-        // Validate hex format
         if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(SiwxError::InvalidSignature(
                 "Ethereum signature must be valid hex".into(),
             ));
         }
 
+        Ok(())
+    }
+
+    /// Validate EIP-1271 signature format (contract-defined). We only require 0x-prefixed valid hex
+    /// and even length, but do NOT enforce 65-byte length.
+    fn validate_eip1271_format(&self) -> SiwxResult<()> {
+        if !self.signature.starts_with("0x") {
+            return Err(SiwxError::InvalidSignature(
+                "Ethereum signature must start with 0x".into(),
+            ));
+        }
+        let hex_part = &self.signature[2..];
+        if hex_part.is_empty() || hex_part.len() % 2 != 0 {
+            return Err(SiwxError::InvalidSignature(
+                "Ethereum signature hex must be non-empty and even length".into(),
+            ));
+        }
+        if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(SiwxError::InvalidSignature(
+                "Ethereum signature must be valid hex".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -137,9 +159,11 @@ impl Signature {
         }
 
         // Basic base58 validation (alphanumeric without 0, O, I, l)
-        if !self.signature.chars().all(|c| {
-            c.is_ascii_alphanumeric() && !matches!(c, '0' | 'O' | 'I' | 'l')
-        }) {
+        if !self
+            .signature
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() && !matches!(c, '0' | 'O' | 'I' | 'l'))
+        {
             return Err(SiwxError::InvalidSignature(
                 "Solana signature must be valid base58".into(),
             ));
@@ -163,11 +187,9 @@ impl Signature {
                 #[cfg(feature = "solana")]
                 {
                     use bs58;
-                    bs58::decode(&self.signature)
-                        .into_vec()
-                        .map_err(|e| {
-                            SiwxError::InvalidSignature(format!("Invalid base58 encoding: {}", e))
-                        })
+                    bs58::decode(&self.signature).into_vec().map_err(|e| {
+                        SiwxError::InvalidSignature(format!("Invalid base58 encoding: {}", e))
+                    })
                 }
                 #[cfg(not(feature = "solana"))]
                 {
@@ -176,11 +198,9 @@ impl Signature {
                     ))
                 }
             }
-            SignatureType::Custom(_) => {
-                Err(SiwxError::InvalidSignature(
-                    "Cannot convert custom signature to bytes".into(),
-                ))
-            }
+            SignatureType::Custom(_) => Err(SiwxError::InvalidSignature(
+                "Cannot convert custom signature to bytes".into(),
+            )),
         }
     }
 
@@ -290,4 +310,4 @@ mod tests {
         assert!(SignatureType::Eip1271.supports_smart_contracts());
         assert!(!SignatureType::Ed25519.supports_smart_contracts());
     }
-} 
+}
