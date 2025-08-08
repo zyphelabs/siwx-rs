@@ -25,6 +25,7 @@ uuid = { version = "1.0", features = ["v4", "serde"] }
 regex = "1.0"
 hex = "0.4"
 async-trait = "0.1"
+dotenvy = "0.15"
 
 # Crypto dependencies
 sha2 = "0.10"

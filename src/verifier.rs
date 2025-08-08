@@ -72,15 +72,21 @@ impl SignatureVerifier {
             ));
         }
 
-        // Try each backend until one succeeds
+        // Try each backend until one validates successfully
+        let mut found_applicable_backend = false;
         for backend in &self.backends {
             if backend.supported_chain() == self.chain
                 && backend
                     .supported_signature_types()
                     .contains(&signature.signature_type)
             {
+                found_applicable_backend = true;
                 match backend.verify(message, signature, public_key).await {
-                    Ok(is_valid) => return Ok(is_valid),
+                    Ok(true) => return Ok(true),
+                    Ok(false) => {
+                        // Try the next applicable backend
+                        continue;
+                    }
                     Err(e) => {
                         // Log the error but continue to next backend
                         eprintln!("Backend verification failed: {}", e);
@@ -90,9 +96,14 @@ impl SignatureVerifier {
             }
         }
 
-        Err(SiwxError::VerificationFailed(
-            "No suitable backend found for verification".into(),
-        ))
+        if found_applicable_backend {
+            // At least one backend could handle this, but none validated successfully
+            Ok(false)
+        } else {
+            Err(SiwxError::VerificationFailed(
+                "No suitable backend found for verification".into(),
+            ))
+        }
     }
 
     /// Get the chain this verifier is configured for
@@ -190,8 +201,22 @@ impl VerifierFactory {
     /// Create a verifier for any chain with default backends
     pub fn for_chain(chain: Chain) -> SignatureVerifier {
         match chain {
-            Chain::Ethereum | Chain::EthereumTestnet => Self::ethereum(),
-            Chain::Solana | Chain::SolanaTestnet => Self::solana(),
+            Chain::Ethereum | Chain::EthereumTestnet => {
+                #[cfg(feature = "ethereum")]
+                {
+                    use crate::backend::ethereum::EthereumSecp256k1Verifier;
+                    SignatureVerifier::new(chain)
+                        .with_backend(Box::new(EthereumSecp256k1Verifier::new()))
+                }
+                #[cfg(not(feature = "ethereum"))]
+                {
+                    SignatureVerifier::new(chain)
+                }
+            }
+            Chain::Solana | Chain::SolanaTestnet => {
+                // Keep parity with ethereum behavior: construct with requested chain
+                SignatureVerifier::new(chain).with_backend(Box::new(SolanaEd25519Verifier))
+            }
         }
     }
 }

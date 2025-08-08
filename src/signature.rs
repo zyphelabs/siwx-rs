@@ -207,17 +207,20 @@ impl Signature {
     /// Get the recovery ID for Ethereum signatures
     pub fn recovery_id(&self) -> SiwxResult<u8> {
         match self.signature_type {
-            SignatureType::Eip191 | SignatureType::Eip1271 => {
+            SignatureType::Eip191 => {
                 let bytes = self.as_bytes()?;
                 if bytes.len() != 65 {
                     return Err(SiwxError::InvalidSignature(
-                        "Ethereum signature must be 65 bytes".into(),
+                        "Ethereum EIP-191 signature must be 65 bytes".into(),
                     ));
                 }
                 Ok(bytes[64])
             }
+            SignatureType::Eip1271 => Err(SiwxError::InvalidSignature(
+                "Recovery ID is not available for EIP-1271 signatures".into(),
+            )),
             _ => Err(SiwxError::InvalidSignature(
-                "Recovery ID only available for Ethereum signatures".into(),
+                "Recovery ID only available for EIP-191 Ethereum signatures".into(),
             )),
         }
     }
@@ -225,19 +228,22 @@ impl Signature {
     /// Get the r and s components for Ethereum signatures
     pub fn r_s_components(&self) -> SiwxResult<(Vec<u8>, Vec<u8>)> {
         match self.signature_type {
-            SignatureType::Eip191 | SignatureType::Eip1271 => {
+            SignatureType::Eip191 => {
                 let bytes = self.as_bytes()?;
                 if bytes.len() != 65 {
                     return Err(SiwxError::InvalidSignature(
-                        "Ethereum signature must be 65 bytes".into(),
+                        "Ethereum EIP-191 signature must be 65 bytes".into(),
                     ));
                 }
                 let r = bytes[..32].to_vec();
                 let s = bytes[32..64].to_vec();
                 Ok((r, s))
             }
+            SignatureType::Eip1271 => Err(SiwxError::InvalidSignature(
+                "R and S components are not available for EIP-1271 signatures".into(),
+            )),
             _ => Err(SiwxError::InvalidSignature(
-                "R and S components only available for Ethereum signatures".into(),
+                "R and S components only available for EIP-191 Ethereum signatures".into(),
             )),
         }
     }
@@ -309,5 +315,40 @@ mod tests {
         assert!(!SignatureType::Eip191.supports_smart_contracts());
         assert!(SignatureType::Eip1271.supports_smart_contracts());
         assert!(!SignatureType::Ed25519.supports_smart_contracts());
+    }
+
+    #[test]
+    fn test_eip1271_signature_format_validation() {
+        // Valid: 0x-prefixed, even-length hex
+        let sig = Signature::eip1271("0x1234abcdef", "0x1234567890123456789012345678901234567890");
+        assert!(sig.validate_format().is_ok());
+
+        // Invalid: not 0x-prefixed
+        let sig = Signature::eip1271("1234abcdef", "0x1234567890123456789012345678901234567890");
+        assert!(sig.validate_format().is_err());
+
+        // Invalid: odd-length hex
+        let sig = Signature::eip1271("0x123", "0x1234567890123456789012345678901234567890");
+        assert!(sig.validate_format().is_err());
+    }
+
+    #[test]
+    fn test_helpers_error_on_eip1271() {
+        // EIP-1271 signatures can be arbitrary length hex; ensure helpers error clearly
+        let sig = Signature::eip1271("0xdeadbeef", "0x1234567890123456789012345678901234567890");
+        let err1 = sig.recovery_id().unwrap_err();
+        let err2 = sig.r_s_components().unwrap_err();
+        match err1 {
+            SiwxError::InvalidSignature(msg) => {
+                assert!(msg.contains("not available for EIP-1271"))
+            }
+            _ => panic!("unexpected error type"),
+        }
+        match err2 {
+            SiwxError::InvalidSignature(msg) => {
+                assert!(msg.contains("not available for EIP-1271"))
+            }
+            _ => panic!("unexpected error type"),
+        }
     }
 }

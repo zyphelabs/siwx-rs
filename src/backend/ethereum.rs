@@ -7,6 +7,7 @@ use crate::{
 use alloy::primitives::{keccak256, Address, Signature as AlloySignature};
 use alloy::{providers::ProviderBuilder, sol};
 use async_trait::async_trait;
+use std::env;
 use std::str::FromStr;
 
 /// Default Ethereum verifier using secp256k1
@@ -122,15 +123,28 @@ impl EthereumSecp256k1Verifier {
         signature: &Signature,
         _public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
-        // Require an RPC URL to perform eth_call
-        let rpc_url = self.rpc_url.as_ref().ok_or_else(|| {
-            SiwxError::VerificationFailed("Ethereum RPC URL not configured".into())
-        })?;
+        // Load provider URL from self, then .env (ETHEREUM_RPC_URL/ETH_RPC_URL),
+        // and finally fallback to a default public mainnet provider
+        // Safe to call multiple times; dotenvy is idempotent.
+        let _ = dotenvy::dotenv();
+        const DEFAULT_PROVIDER_URL: &str =
+            "https://mainnet.infura.io/v3/84842078b09946638c03157f83405213";
+
+        let effective_url = self
+            .rpc_url
+            .as_ref()
+            .cloned()
+            .or_else(|| env::var("ETHEREUM_RPC_URL").ok())
+            .or_else(|| env::var("ETH_RPC_URL").ok())
+            .unwrap_or_else(|| DEFAULT_PROVIDER_URL.to_string());
 
         // Build provider (http or ws based on URL scheme)
-        let provider = ProviderBuilder::new().connect(rpc_url).await.map_err(|e| {
-            SiwxError::VerificationFailed(format!("Failed to connect provider: {e}"))
-        })?;
+        let provider = ProviderBuilder::new()
+            .connect(&effective_url)
+            .await
+            .map_err(|e| {
+                SiwxError::VerificationFailed(format!("Failed to connect provider: {e}"))
+            })?;
 
         // Compute EIP-191 hash of the message
         let msg = message.message_to_sign()?;
@@ -141,6 +155,17 @@ impl EthereumSecp256k1Verifier {
         let contract_addr = Address::from_str(signature.signer.as_str()).map_err(|e| {
             SiwxError::InvalidAddress(format!("Invalid contract address for EIP-1271: {e}"))
         })?;
+
+        // Parse message address and ensure it matches the contract address to prevent
+        // cross-contract signature replay attacks.
+        let message_addr = Address::from_str(message.address.as_str()).map_err(|e| {
+            SiwxError::InvalidAddress(format!("Invalid message address for EIP-1271: {e}"))
+        })?;
+        if message_addr != contract_addr {
+            return Err(SiwxError::VerificationFailed(
+                "Signer does not match message address".into(),
+            ));
+        }
 
         // Use a minimal IERC1271 interface via sol! macro
         sol! {
@@ -172,6 +197,7 @@ mod tests {
     use crate::{public_key::EthereumPublicKey, verifier::SignatureVerifier, VerifierFactory};
     use alloy::signers::{local::PrivateKeySigner, Signer};
     use k256::{elliptic_curve::sec1::ToEncodedPoint, SecretKey};
+    use std::env;
 
     fn uncompressed_pubkey_hex_from_privkey_hex(priv_hex: &str) -> String {
         let bytes = hex::decode(priv_hex.trim_start_matches("0x")).unwrap();
@@ -249,6 +275,13 @@ mod tests {
     const DEFAULT_PROVIDER_URL: &str =
         "https://mainnet.infura.io/v3/84842078b09946638c03157f83405213";
 
+    fn test_provider_url() -> String {
+        let _ = dotenvy::dotenv();
+        env::var("ETHEREUM_RPC_URL")
+            .or_else(|_| env::var("ETH_RPC_URL"))
+            .unwrap_or_else(|_| DEFAULT_PROVIDER_URL.to_string())
+    }
+
     // Ignored network tests; run with: cargo test --features ethereum -- --ignored --test-threads=1
     #[ignore]
     #[tokio::test]
@@ -271,7 +304,7 @@ mod tests {
         let sig = crate::Signature::eip1271(signature_hex, contract_address);
         let dummy_pubkey = EthereumPublicKey::new("0x04".to_string() + &"11".repeat(64));
         let verifier = SignatureVerifier::new(Chain::Ethereum).with_backend(Box::new(
-            EthereumSecp256k1Verifier::with_rpc_url(DEFAULT_PROVIDER_URL),
+            EthereumSecp256k1Verifier::with_rpc_url(test_provider_url()),
         ));
         let ok = verifier
             .verify(&message, &sig, &dummy_pubkey)
@@ -301,7 +334,7 @@ mod tests {
         let sig = crate::Signature::eip1271(signature_hex, contract_address);
         let dummy_pubkey = EthereumPublicKey::new("0x04".to_string() + &"11".repeat(64));
         let verifier = SignatureVerifier::new(Chain::Ethereum).with_backend(Box::new(
-            EthereumSecp256k1Verifier::with_rpc_url(DEFAULT_PROVIDER_URL),
+            EthereumSecp256k1Verifier::with_rpc_url(test_provider_url()),
         ));
         let ok = verifier
             .verify(&message, &sig, &dummy_pubkey)
