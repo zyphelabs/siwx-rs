@@ -32,7 +32,6 @@ sha2 = "0.10"
 sha3 = "0.10"
 ed25519 = "2.0"
 ed25519-dalek = { version = "2.2.0", optional = true }
-secp256k1 = { version = "0.31.1", features = ["rand"] }
 
 # Optional blockchain-specific dependencies (can be enabled via features)
 # Use the Alloy meta crate per Getting Started guide
