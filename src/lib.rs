@@ -34,6 +34,7 @@
 //! // let is_valid = verifier.verify(&message, &signature, &public_key).await?;
 //! ```
 
+pub mod backend;
 pub mod chain;
 pub mod error;
 pub mod message;

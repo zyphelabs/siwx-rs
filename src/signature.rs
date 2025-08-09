@@ -94,15 +94,16 @@ impl Signature {
     /// Validate the signature format
     pub fn validate_format(&self) -> SiwxResult<()> {
         match self.signature_type {
-            SignatureType::Eip191 | SignatureType::Eip1271 => self.validate_ethereum_format(),
+            SignatureType::Eip191 => self.validate_ethereum_eip191_format(),
+            SignatureType::Eip1271 => self.validate_eip1271_format(),
             SignatureType::Ed25519 => self.validate_solana_format(),
             SignatureType::Custom(_) => Ok(()), // Custom types are not validated
         }
     }
 
     /// Validate Ethereum signature format
-    fn validate_ethereum_format(&self) -> SiwxResult<()> {
-        // Ethereum signatures should be hex-encoded and 65 bytes (130 hex chars)
+    fn validate_ethereum_eip191_format(&self) -> SiwxResult<()> {
+        // EIP-191 signatures must be 65 bytes (r,s,v) and hex-encoded
         if !self.signature.starts_with("0x") {
             return Err(SiwxError::InvalidSignature(
                 "Ethereum signature must start with 0x".into(),
@@ -117,13 +118,34 @@ impl Signature {
             )));
         }
 
-        // Validate hex format
         if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
             return Err(SiwxError::InvalidSignature(
                 "Ethereum signature must be valid hex".into(),
             ));
         }
 
+        Ok(())
+    }
+
+    /// Validate EIP-1271 signature format (contract-defined). We only require 0x-prefixed valid hex
+    /// and even length, but do NOT enforce 65-byte length.
+    fn validate_eip1271_format(&self) -> SiwxResult<()> {
+        if !self.signature.starts_with("0x") {
+            return Err(SiwxError::InvalidSignature(
+                "Ethereum signature must start with 0x".into(),
+            ));
+        }
+        let hex_part = &self.signature[2..];
+        if hex_part.is_empty() || hex_part.len() % 2 != 0 {
+            return Err(SiwxError::InvalidSignature(
+                "Ethereum signature hex must be non-empty and even length".into(),
+            ));
+        }
+        if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(SiwxError::InvalidSignature(
+                "Ethereum signature must be valid hex".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -137,9 +159,11 @@ impl Signature {
         }
 
         // Basic base58 validation (alphanumeric without 0, O, I, l)
-        if !self.signature.chars().all(|c| {
-            c.is_ascii_alphanumeric() && !matches!(c, '0' | 'O' | 'I' | 'l')
-        }) {
+        if !self
+            .signature
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() && !matches!(c, '0' | 'O' | 'I' | 'l'))
+        {
             return Err(SiwxError::InvalidSignature(
                 "Solana signature must be valid base58".into(),
             ));
@@ -163,11 +187,9 @@ impl Signature {
                 #[cfg(feature = "solana")]
                 {
                     use bs58;
-                    bs58::decode(&self.signature)
-                        .into_vec()
-                        .map_err(|e| {
-                            SiwxError::InvalidSignature(format!("Invalid base58 encoding: {}", e))
-                        })
+                    bs58::decode(&self.signature).into_vec().map_err(|e| {
+                        SiwxError::InvalidSignature(format!("Invalid base58 encoding: {}", e))
+                    })
                 }
                 #[cfg(not(feature = "solana"))]
                 {
@@ -176,28 +198,29 @@ impl Signature {
                     ))
                 }
             }
-            SignatureType::Custom(_) => {
-                Err(SiwxError::InvalidSignature(
-                    "Cannot convert custom signature to bytes".into(),
-                ))
-            }
+            SignatureType::Custom(_) => Err(SiwxError::InvalidSignature(
+                "Cannot convert custom signature to bytes".into(),
+            )),
         }
     }
 
     /// Get the recovery ID for Ethereum signatures
     pub fn recovery_id(&self) -> SiwxResult<u8> {
         match self.signature_type {
-            SignatureType::Eip191 | SignatureType::Eip1271 => {
+            SignatureType::Eip191 => {
                 let bytes = self.as_bytes()?;
                 if bytes.len() != 65 {
                     return Err(SiwxError::InvalidSignature(
-                        "Ethereum signature must be 65 bytes".into(),
+                        "Ethereum EIP-191 signature must be 65 bytes".into(),
                     ));
                 }
                 Ok(bytes[64])
             }
+            SignatureType::Eip1271 => Err(SiwxError::InvalidSignature(
+                "Recovery ID is not available for EIP-1271 signatures".into(),
+            )),
             _ => Err(SiwxError::InvalidSignature(
-                "Recovery ID only available for Ethereum signatures".into(),
+                "Recovery ID only available for EIP-191 Ethereum signatures".into(),
             )),
         }
     }
@@ -205,19 +228,22 @@ impl Signature {
     /// Get the r and s components for Ethereum signatures
     pub fn r_s_components(&self) -> SiwxResult<(Vec<u8>, Vec<u8>)> {
         match self.signature_type {
-            SignatureType::Eip191 | SignatureType::Eip1271 => {
+            SignatureType::Eip191 => {
                 let bytes = self.as_bytes()?;
                 if bytes.len() != 65 {
                     return Err(SiwxError::InvalidSignature(
-                        "Ethereum signature must be 65 bytes".into(),
+                        "Ethereum EIP-191 signature must be 65 bytes".into(),
                     ));
                 }
                 let r = bytes[..32].to_vec();
                 let s = bytes[32..64].to_vec();
                 Ok((r, s))
             }
+            SignatureType::Eip1271 => Err(SiwxError::InvalidSignature(
+                "R and S components are not available for EIP-1271 signatures".into(),
+            )),
             _ => Err(SiwxError::InvalidSignature(
-                "R and S components only available for Ethereum signatures".into(),
+                "R and S components only available for EIP-191 Ethereum signatures".into(),
             )),
         }
     }
@@ -290,4 +316,39 @@ mod tests {
         assert!(SignatureType::Eip1271.supports_smart_contracts());
         assert!(!SignatureType::Ed25519.supports_smart_contracts());
     }
-} 
+
+    #[test]
+    fn test_eip1271_signature_format_validation() {
+        // Valid: 0x-prefixed, even-length hex
+        let sig = Signature::eip1271("0x1234abcdef", "0x1234567890123456789012345678901234567890");
+        assert!(sig.validate_format().is_ok());
+
+        // Invalid: not 0x-prefixed
+        let sig = Signature::eip1271("1234abcdef", "0x1234567890123456789012345678901234567890");
+        assert!(sig.validate_format().is_err());
+
+        // Invalid: odd-length hex
+        let sig = Signature::eip1271("0x123", "0x1234567890123456789012345678901234567890");
+        assert!(sig.validate_format().is_err());
+    }
+
+    #[test]
+    fn test_helpers_error_on_eip1271() {
+        // EIP-1271 signatures can be arbitrary length hex; ensure helpers error clearly
+        let sig = Signature::eip1271("0xdeadbeef", "0x1234567890123456789012345678901234567890");
+        let err1 = sig.recovery_id().unwrap_err();
+        let err2 = sig.r_s_components().unwrap_err();
+        match err1 {
+            SiwxError::InvalidSignature(msg) => {
+                assert!(msg.contains("not available for EIP-1271"))
+            }
+            _ => panic!("unexpected error type"),
+        }
+        match err2 {
+            SiwxError::InvalidSignature(msg) => {
+                assert!(msg.contains("not available for EIP-1271"))
+            }
+            _ => panic!("unexpected error type"),
+        }
+    }
+}

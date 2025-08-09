@@ -1,4 +1,4 @@
-use crate::{Chain, SiwxError, SiwxMessage, SiwxResult, Signature, SignatureType, PublicKey};
+use crate::{Chain, PublicKey, Signature, SignatureType, SiwxError, SiwxMessage, SiwxResult};
 use async_trait::async_trait;
 use std::fmt;
 
@@ -72,13 +72,21 @@ impl SignatureVerifier {
             ));
         }
 
-        // Try each backend until one succeeds
+        // Try each backend until one validates successfully
+        let mut found_applicable_backend = false;
         for backend in &self.backends {
             if backend.supported_chain() == self.chain
-                && backend.supported_signature_types().contains(&signature.signature_type)
+                && backend
+                    .supported_signature_types()
+                    .contains(&signature.signature_type)
             {
+                found_applicable_backend = true;
                 match backend.verify(message, signature, public_key).await {
-                    Ok(is_valid) => return Ok(is_valid),
+                    Ok(true) => return Ok(true),
+                    Ok(false) => {
+                        // Try the next applicable backend
+                        continue;
+                    }
                     Err(e) => {
                         // Log the error but continue to next backend
                         eprintln!("Backend verification failed: {}", e);
@@ -88,9 +96,14 @@ impl SignatureVerifier {
             }
         }
 
-        Err(SiwxError::VerificationFailed(
-            "No suitable backend found for verification".into(),
-        ))
+        if found_applicable_backend {
+            // At least one backend could handle this, but none validated successfully
+            Ok(false)
+        } else {
+            Err(SiwxError::VerificationFailed(
+                "No suitable backend found for verification".into(),
+            ))
+        }
     }
 
     /// Get the chain this verifier is configured for
@@ -113,57 +126,7 @@ impl fmt::Debug for SignatureVerifier {
     }
 }
 
-/// Default Ethereum verifier using secp256k1
-pub struct EthereumSecp256k1Verifier;
-
-#[async_trait]
-impl SignatureVerifierBackend for EthereumSecp256k1Verifier {
-    async fn verify(
-        &self,
-        message: &SiwxMessage,
-        signature: &Signature,
-        public_key: &dyn PublicKey,
-    ) -> SiwxResult<bool> {
-        match signature.signature_type {
-            SignatureType::Eip191 => self.verify_eip191(message, signature, public_key).await,
-            SignatureType::Eip1271 => {
-                Err(SiwxError::VerificationFailed(
-                    "EIP-1271 verification not implemented in this backend".into(),
-                ))
-            }
-            _ => Err(SiwxError::VerificationFailed(
-                "Unsupported signature type for Ethereum".into(),
-            )),
-        }
-    }
-
-    fn supported_chain(&self) -> Chain {
-        Chain::Ethereum
-    }
-
-    fn supported_signature_types(&self) -> Vec<SignatureType> {
-        vec![SignatureType::Eip191]
-    }
-}
-
-impl EthereumSecp256k1Verifier {
-    /// Verify EIP-191 personal_sign signature
-    async fn verify_eip191(
-        &self,
-        message: &SiwxMessage,
-        signature: &Signature,
-        public_key: &dyn PublicKey,
-    ) -> SiwxResult<bool> {
-        // For now, return true as a placeholder
-        // In a real implementation, you would use a proper crypto library
-        // like ethers-rs, alloy-rs, or implement the verification manually
-        println!("EIP-191 signature verification not fully implemented yet");
-        println!("Message: {}", message.message_to_sign()?);
-        println!("Signature: {}", signature.signature);
-        println!("Public key: {}", public_key.as_string());
-        Ok(true)
-    }
-}
+// Ethereum backend moved to `backend::ethereum` under the `ethereum` feature.
 
 /// Default Solana verifier using ed25519
 pub struct SolanaEd25519Verifier;
@@ -218,21 +181,42 @@ pub struct VerifierFactory;
 impl VerifierFactory {
     /// Create a verifier for Ethereum with default backends
     pub fn ethereum() -> SignatureVerifier {
-        SignatureVerifier::new(Chain::Ethereum)
-            .with_backend(Box::new(EthereumSecp256k1Verifier))
+        #[cfg(feature = "ethereum")]
+        {
+            use crate::backend::ethereum::EthereumSecp256k1Verifier;
+            SignatureVerifier::new(Chain::Ethereum)
+                .with_backend(Box::new(EthereumSecp256k1Verifier::new()))
+        }
+        #[cfg(not(feature = "ethereum"))]
+        {
+            SignatureVerifier::new(Chain::Ethereum)
+        }
     }
 
     /// Create a verifier for Solana with default backends
     pub fn solana() -> SignatureVerifier {
-        SignatureVerifier::new(Chain::Solana)
-            .with_backend(Box::new(SolanaEd25519Verifier))
+        SignatureVerifier::new(Chain::Solana).with_backend(Box::new(SolanaEd25519Verifier))
     }
 
     /// Create a verifier for any chain with default backends
     pub fn for_chain(chain: Chain) -> SignatureVerifier {
         match chain {
-            Chain::Ethereum | Chain::EthereumTestnet => Self::ethereum(),
-            Chain::Solana | Chain::SolanaTestnet => Self::solana(),
+            Chain::Ethereum | Chain::EthereumTestnet => {
+                #[cfg(feature = "ethereum")]
+                {
+                    use crate::backend::ethereum::EthereumSecp256k1Verifier;
+                    SignatureVerifier::new(chain)
+                        .with_backend(Box::new(EthereumSecp256k1Verifier::new()))
+                }
+                #[cfg(not(feature = "ethereum"))]
+                {
+                    SignatureVerifier::new(chain)
+                }
+            }
+            Chain::Solana | Chain::SolanaTestnet => {
+                // Keep parity with ethereum behavior: construct with requested chain
+                SignatureVerifier::new(chain).with_backend(Box::new(SolanaEd25519Verifier))
+            }
         }
     }
 }
@@ -240,13 +224,16 @@ impl VerifierFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SiwxMessage, PublicKeyFactory};
+    use crate::{PublicKeyFactory, SiwxMessage};
 
     #[tokio::test]
     async fn test_verifier_creation() {
         let verifier = VerifierFactory::ethereum();
         assert_eq!(verifier.chain(), Chain::Ethereum);
+        #[cfg(feature = "ethereum")]
         assert_eq!(verifier.backend_count(), 1);
+        #[cfg(not(feature = "ethereum"))]
+        assert_eq!(verifier.backend_count(), 0);
 
         let verifier = VerifierFactory::solana();
         assert_eq!(verifier.chain(), Chain::Solana);
@@ -264,13 +251,21 @@ mod tests {
 
     #[test]
     fn test_backend_support() {
-        let eth_backend = EthereumSecp256k1Verifier;
-        assert_eq!(eth_backend.supported_chain(), Chain::Ethereum);
-        assert!(eth_backend.supported_signature_types().contains(&SignatureType::Eip191));
+        #[cfg(feature = "ethereum")]
+        {
+            use crate::backend::ethereum::EthereumSecp256k1Verifier;
+            let eth_backend = EthereumSecp256k1Verifier::new();
+            assert_eq!(eth_backend.supported_chain(), Chain::Ethereum);
+            assert!(eth_backend
+                .supported_signature_types()
+                .contains(&SignatureType::Eip191));
+        }
 
         let sol_backend = SolanaEd25519Verifier;
         assert_eq!(sol_backend.supported_chain(), Chain::Solana);
-        assert!(sol_backend.supported_signature_types().contains(&SignatureType::Ed25519));
+        assert!(sol_backend
+            .supported_signature_types()
+            .contains(&SignatureType::Ed25519));
     }
 
     #[tokio::test]
@@ -289,8 +284,8 @@ mod tests {
             "0x1234567890123456789012345678901234567890",
         );
         let public_key = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
-        
+
         // This should not panic with the new public key abstraction
         let _result = verifier.verify(&message, &signature, &public_key).await;
     }
-} 
+}
