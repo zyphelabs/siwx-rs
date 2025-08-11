@@ -268,7 +268,8 @@ mod tests {
         let public_key = PublicKeyFactory::for_chain(
             "0x1234567890123456789012345678901234567890",
             Chain::Ethereum,
-        );
+        )
+        .unwrap();
 
         // This should not panic with the new public key abstraction
         let _result = verifier.verify(&message, &signature, &public_key).await;

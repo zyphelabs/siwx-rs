@@ -282,7 +282,7 @@ mod tests {
         let signature = crate::Signature::eip191(sig_hex, addr.clone());
 
         // Provide only an address as the "public key"
-        let pk = EthereumAddress::new(addr.clone());
+        let pk = EthereumAddress::new(addr.clone()).unwrap();
 
         let verifier = VerifierFactory::ethereum();
         let result = verifier.verify(&message, &signature, &pk).await.unwrap();
