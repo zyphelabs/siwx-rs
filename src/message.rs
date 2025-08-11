@@ -7,6 +7,7 @@ use std::fmt;
 use uuid::Uuid;
 
 /// SIWX message following EIP-4361 standard
+#[typeshare::typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiwxMessage {
     /// The domain requesting the signing
@@ -20,6 +21,7 @@ pub struct SiwxMessage {
     /// The current version of the message
     pub version: String,
     /// The EIP-155 chain ID to which the session is bound
+    #[typeshare(serialized_as = "number")]
     pub chain_id: u64,
     /// A randomized token used to prevent replay attacks
     pub nonce: String,
@@ -34,6 +36,7 @@ pub struct SiwxMessage {
     /// A list of information or references to information the user wishes to have resolved
     pub resources: Option<Vec<String>>,
     /// Additional fields specific to the chain
+    #[typeshare(skip)]
     #[serde(flatten)]
     pub chain_specific: HashMap<String, String>,
 }
@@ -132,7 +135,9 @@ impl SiwxMessage {
     pub fn validate(&self) -> SiwxResult<()> {
         // Validate domain
         if self.domain.is_empty() {
-            return Err(SiwxError::InvalidMessageFormat("Domain cannot be empty".into()));
+            return Err(SiwxError::InvalidMessageFormat(
+                "Domain cannot be empty".into(),
+            ));
         }
 
         // Validate address format based on chain
@@ -141,17 +146,23 @@ impl SiwxMessage {
 
         // Validate URI
         if self.uri.is_empty() {
-            return Err(SiwxError::InvalidMessageFormat("URI cannot be empty".into()));
+            return Err(SiwxError::InvalidMessageFormat(
+                "URI cannot be empty".into(),
+            ));
         }
 
         // Validate version
         if self.version.is_empty() {
-            return Err(SiwxError::InvalidMessageFormat("Version cannot be empty".into()));
+            return Err(SiwxError::InvalidMessageFormat(
+                "Version cannot be empty".into(),
+            ));
         }
 
         // Validate nonce
         if self.nonce.is_empty() {
-            return Err(SiwxError::InvalidMessageFormat("Nonce cannot be empty".into()));
+            return Err(SiwxError::InvalidMessageFormat(
+                "Nonce cannot be empty".into(),
+            ));
         }
 
         // Validate issued_at
@@ -197,7 +208,10 @@ impl SiwxMessage {
         let mut lines = Vec::new();
 
         // Header
-        lines.push(format!("{} wants you to sign in with your Ethereum account:", self.domain));
+        lines.push(format!(
+            "{} wants you to sign in with your Ethereum account:",
+            self.domain
+        ));
         lines.push(self.address.clone());
         lines.push("".to_string());
 
@@ -253,7 +267,10 @@ impl SiwxMessage {
         let mut lines = Vec::new();
 
         // Header
-        lines.push(format!("{} wants you to sign in with your Solana account:", self.domain));
+        lines.push(format!(
+            "{} wants you to sign in with your Solana account:",
+            self.domain
+        ));
         lines.push(self.address.clone());
         lines.push("".to_string());
 
@@ -331,8 +348,9 @@ impl SiwxMessage {
     /// Check if the message has expired
     pub fn is_expired(&self) -> SiwxResult<bool> {
         if let Some(ref expiration_time) = self.expiration_time {
-            let expiration = DateTime::parse_from_rfc3339(expiration_time)
-                .map_err(|e| SiwxError::InvalidTimestamp(format!("Invalid expiration time: {}", e)))?;
+            let expiration = DateTime::parse_from_rfc3339(expiration_time).map_err(|e| {
+                SiwxError::InvalidTimestamp(format!("Invalid expiration time: {}", e))
+            })?;
             let now = Utc::now();
             Ok(now > expiration.with_timezone(&Utc))
         } else {
@@ -343,8 +361,9 @@ impl SiwxMessage {
     /// Check if the message is valid for signing (not before time)
     pub fn is_valid_for_signing(&self) -> SiwxResult<bool> {
         if let Some(ref not_before) = self.not_before {
-            let not_before_time = DateTime::parse_from_rfc3339(not_before)
-                .map_err(|e| SiwxError::InvalidTimestamp(format!("Invalid not_before time: {}", e)))?;
+            let not_before_time = DateTime::parse_from_rfc3339(not_before).map_err(|e| {
+                SiwxError::InvalidTimestamp(format!("Invalid not_before time: {}", e))
+            })?;
             let now = Utc::now();
             Ok(now >= not_before_time.with_timezone(&Utc))
         } else {
@@ -372,9 +391,12 @@ impl SiwxMessage {
 
 impl fmt::Display for SiwxMessage {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.message_to_sign().unwrap_or_else(|_| {
-            format!("Invalid SIWX message: {:?}", self)
-        }))
+        write!(
+            f,
+            "{}",
+            self.message_to_sign()
+                .unwrap_or_else(|_| { format!("Invalid SIWX message: {:?}", self) })
+        )
     }
 }
 
@@ -407,7 +429,10 @@ mod tests {
         );
 
         assert_eq!(message.domain, "example.com");
-        assert_eq!(message.address, "0x1234567890123456789012345678901234567890");
+        assert_eq!(
+            message.address,
+            "0x1234567890123456789012345678901234567890"
+        );
         assert_eq!(message.uri, "https://example.com/login");
         assert_eq!(message.version, "1");
         assert_eq!(message.nonce, "nonce123");
@@ -467,7 +492,8 @@ mod tests {
             "1",
             expired.to_rfc3339(),
             "nonce123",
-        ).with_expiration_time(expired.to_rfc3339());
+        )
+        .with_expiration_time(expired.to_rfc3339());
 
         let future_message = SiwxMessage::new(
             "example.com",
@@ -476,9 +502,10 @@ mod tests {
             "1",
             now.to_rfc3339(),
             "nonce123",
-        ).with_expiration_time(future.to_rfc3339());
+        )
+        .with_expiration_time(future.to_rfc3339());
 
         assert!(expired_message.is_expired().unwrap());
         assert!(!future_message.is_expired().unwrap());
     }
-} 
+}

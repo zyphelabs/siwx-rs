@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Signature types supported by the library
+#[typeshare::typeshare]
+#[typeshare::typeshare]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
 pub enum SignatureType {
     /// EIP-191 personal_sign (Ethereum)
     Eip191,
@@ -42,6 +45,7 @@ impl fmt::Display for SignatureType {
 }
 
 /// Signature data structure
+#[typeshare::typeshare]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Signature {
     /// The signature type

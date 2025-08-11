@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Supported blockchain networks
+#[typeshare::typeshare]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Chain {
     /// Ethereum mainnet
@@ -98,4 +99,4 @@ mod tests {
         assert_eq!(Chain::Ethereum.to_string(), "Ethereum");
         assert_eq!(Chain::Solana.to_string(), "Solana");
     }
-} 
+}

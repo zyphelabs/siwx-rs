@@ -45,17 +45,27 @@ pub mod verifier;
 pub use chain::Chain;
 pub use error::{SiwxError, SiwxResult};
 pub use message::SiwxMessage;
+#[cfg(feature = "ethereum")]
+pub use public_key::EthereumPublicKey;
+#[cfg(feature = "solana")]
+pub use public_key::SolanaPublicKey;
+#[cfg(not(feature = "solana"))]
+pub use public_key::{PublicKey, PublicKeyEnum, PublicKeyFactory};
+#[cfg(feature = "solana")]
 pub use public_key::{
-    EthereumPublicKey, PublicKey, PublicKeyEnum, PublicKeyFactory, SolanaPublicKey,
+    PublicKey, PublicKeyEnum, PublicKeyFactory, SolanaPublicKey as _SolanaPublicKeyMarker,
 };
 pub use signature::{Signature, SignatureType};
 pub use verifier::{SignatureVerifier, VerifierFactory};
 
 /// Re-export commonly used types
 pub mod prelude {
+    #[cfg(feature = "ethereum")]
+    pub use super::EthereumPublicKey;
+    #[cfg(feature = "solana")]
+    pub use super::SolanaPublicKey;
     pub use super::{
-        Chain, EthereumPublicKey, PublicKey, PublicKeyEnum, PublicKeyFactory, Signature,
-        SignatureType, SignatureVerifier, SiwxError, SiwxMessage, SiwxResult, SolanaPublicKey,
-        VerifierFactory,
+        Chain, PublicKey, PublicKeyEnum, PublicKeyFactory, Signature, SignatureType,
+        SignatureVerifier, SiwxError, SiwxMessage, SiwxResult, VerifierFactory,
     };
 }

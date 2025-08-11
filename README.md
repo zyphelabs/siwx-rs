@@ -16,11 +16,11 @@ A Rust library for implementing Sign-In with X (SIWX) authentication across mult
 
 ## Supported Chains
 
-- **Ethereum** (Mainnet & Testnets)
+- **Ethereum** (Mainnet & Testnets) [requires enabling the `ethereum` feature]
   - EIP-191 personal_sign signatures
   - EIP-1271 smart contract signatures
   - secp256k1 cryptography
-- **Solana** (Mainnet & Testnets)
+- **Solana** (Mainnet & Testnets) [requires enabling the `solana` feature]
   - Ed25519 signatures
   - Base58 encoding
 
@@ -66,7 +66,7 @@ async fn main() -> SiwxResult<()> {
     let message_to_sign = message.message_to_sign()?;
     println!("Message to sign:\n{}", message_to_sign);
 
-    // Create a verifier
+    // Create a verifier (requires the `ethereum` feature)
     let verifier = VerifierFactory::ethereum();
 
     // Verify a signature (example). For Ethereum EIP-191, provide the signer address.
@@ -79,8 +79,10 @@ async fn main() -> SiwxResult<()> {
     );
 
     // Pass the signer address as the key (address-only flow)
-    let public_key = PublicKeyFactory::ethereum(
-        "0x1234567890123456789012345678901234567890"
+    // Requires the `ethereum` feature; otherwise Ethereum constructors are unavailable
+    let public_key = PublicKeyFactory::for_chain(
+        "0x1234567890123456789012345678901234567890",
+        Chain::Ethereum,
     )?;
     let is_valid = verifier.verify(&message, &signature, &public_key).await?;
     println!("Signature valid: {}", is_valid);
@@ -94,6 +96,7 @@ async fn main() -> SiwxResult<()> {
 ```rust
 use siwx_rs::prelude::*;
 
+// Requires `--features ethereum`
 // Create Ethereum SIWX message
 let eth_message = SiwxMessage::new_with_chain(
     "example.com",
@@ -115,8 +118,9 @@ let message_to_sign = eth_message.message_to_sign()?;
 // Create verifier with default backend (supports EIP-191 and EIP-1271)
 let verifier = VerifierFactory::ethereum();
 // EIP-191 address-only flow: pass the address as the key
-let addr_key = PublicKeyFactory::ethereum(
-    "0x1234567890123456789012345678901234567890"
+let addr_key = PublicKeyFactory::for_chain(
+    "0x1234567890123456789012345678901234567890",
+    Chain::Ethereum,
 )?;
 ```
 
@@ -125,6 +129,7 @@ let addr_key = PublicKeyFactory::ethereum(
 ```rust
 use siwx_rs::prelude::*;
 
+// Requires `--features solana`
 // Create Solana SIWX message
 let sol_message = SiwxMessage::new_with_chain(
     "example.com",
@@ -161,6 +166,7 @@ Example using an authority key for a PDA:
 ```rust
 use siwx_rs::prelude::*;
 
+// Requires `--features solana`
 // Assume you already know the PDA and its program id/seeds used to derive it
 let program_id_b58 = "<PROGRAM_ID_BASE58>";
 let pda_address_b58 = "<PDA_ADDRESS_BASE58>";
@@ -292,12 +298,16 @@ The library provides a trait-based abstraction for public keys, making it easy t
 use siwx_rs::prelude::*;
 
 // Create Ethereum public key (uncompressed 65-byte secp256k1, 0x04 + 64 bytes)
-let eth_public_key = PublicKeyFactory::ethereum("0x04<128-hex-chars-of-uncompressed-pubkey>");
+// Requires `--features ethereum`
+let eth_public_key = PublicKeyFactory::for_chain(
+    "0x04<128-hex-chars-of-uncompressed-pubkey>",
+    Chain::Ethereum,
+);
 
 // Create Solana public key
 let sol_public_key = PublicKeyFactory::solana("11111111111111111111111111111112");
 
-// Auto-detect public key type
+// Auto-detect public key type (requires the relevant feature for detected chain)
 let auto_detected = PublicKeyFactory::auto_detect("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890")?;
 
 // Chain-specific creation
@@ -318,9 +328,8 @@ if eth_public_key.supports_signature_type(&SignatureType::Eip191) {
     println!("Supports EIP-191 signatures");
 }
 
-// Get address from public key (requires that the key was constructed with a known address,
-// or a future version of this library adds on-the-fly derivation)
-let address = eth_public_key.address()?; // may error if address derivation is not available
+// Get address from public key
+let address = eth_public_key.address()?;
 ```
 
 ### Extending for New Chains
@@ -378,7 +387,10 @@ let verifier = VerifierFactory::ethereum();
 
 // Verify signature (Ethereum supports passing an address or uncompressed secp256k1 pubkey)
 // Address-only recommended:
-let public_key = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890")?;
+let public_key = PublicKeyFactory::for_chain(
+    "0x1234567890123456789012345678901234567890",
+    Chain::Ethereum,
+)?;
 let is_valid = verifier.verify(&message, &signature, &public_key).await?;
 ```
 
