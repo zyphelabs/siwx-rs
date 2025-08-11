@@ -8,7 +8,7 @@ async fn main() -> SiwxResult<()> {
     println!("1. Ethereum Public Key Example:");
     let eth_public_key = PublicKeyFactory::ethereum(
         "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
-    );
+    )?;
     
     println!("   Chain: {}", eth_public_key.chain());
     println!("   Key Type: {}", eth_public_key.key_type());
@@ -65,10 +65,10 @@ async fn main() -> SiwxResult<()> {
     let eth_for_chain = PublicKeyFactory::for_chain(
         "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
         Chain::Ethereum
-    );
+    )?;
     println!("   Ethereum for chain: {}", eth_for_chain.chain());
 
-    let sol_for_chain = PublicKeyFactory::for_chain("11111111111111111111111111111112", Chain::Solana);
+    let sol_for_chain = PublicKeyFactory::for_chain("11111111111111111111111111111112", Chain::Solana)?;
     println!("   Solana for chain: {}", sol_for_chain.chain());
     println!();
 
@@ -79,7 +79,7 @@ async fn main() -> SiwxResult<()> {
     
     // Try with invalid key
     let invalid_key = PublicKeyFactory::ethereum("invalid_key");
-    println!("   Invalid key validation: {:?}", invalid_key.validate());
+    println!("   Invalid key creation result: {:?}", invalid_key);
     println!();
 
     // Example 7: Address derivation

@@ -51,7 +51,10 @@ impl SignatureVerifier {
         // Validate message and signature first
         message.validate()?;
         signature.validate_format()?;
-        public_key.validate()?;
+        // Only validate the provided public key for signature types that require it
+        if matches!(signature.signature_type, SignatureType::Ed25519) {
+            public_key.validate()?;
+        }
 
         // Check if message has expired
         if message.is_expired()? {
@@ -65,8 +68,10 @@ impl SignatureVerifier {
             ));
         }
 
-        // Check if public key supports the signature type
-        if !public_key.supports_signature_type(&signature.signature_type) {
+        // Check if public key supports the signature type when the key is used for verification
+        if matches!(signature.signature_type, SignatureType::Ed25519)
+            && !public_key.supports_signature_type(&signature.signature_type)
+        {
             return Err(SiwxError::VerificationFailed(
                 "Public key does not support the signature type".into(),
             ));
@@ -179,8 +184,7 @@ impl VerifierFactory {
                 #[cfg(feature = "solana")]
                 {
                     use crate::backend::solana::SolanaEd25519Verifier;
-                    SignatureVerifier::new(chain)
-                        .with_backend(Box::new(SolanaEd25519Verifier))
+                    SignatureVerifier::new(chain).with_backend(Box::new(SolanaEd25519Verifier))
                 }
                 #[cfg(not(feature = "solana"))]
                 {
@@ -207,7 +211,10 @@ mod tests {
 
         let verifier = VerifierFactory::solana();
         assert_eq!(verifier.chain(), Chain::Solana);
+        #[cfg(feature = "solana")]
         assert_eq!(verifier.backend_count(), 1);
+        #[cfg(not(feature = "solana"))]
+        assert_eq!(verifier.backend_count(), 0);
     }
 
     #[tokio::test]
@@ -257,7 +264,12 @@ mod tests {
             "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
             "0x1234567890123456789012345678901234567890",
         );
-        let public_key = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
+        // Provide either a public key or address; both should be accepted now
+        let public_key = PublicKeyFactory::for_chain(
+            "0x1234567890123456789012345678901234567890",
+            Chain::Ethereum,
+        )
+        .unwrap();
 
         // This should not panic with the new public key abstraction
         let _result = verifier.verify(&message, &signature, &public_key).await;
