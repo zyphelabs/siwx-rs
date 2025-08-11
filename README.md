@@ -69,15 +69,19 @@ async fn main() -> SiwxResult<()> {
     // Create a verifier
     let verifier = VerifierFactory::ethereum();
 
-    // Verify a signature (example). For Ethereum EIP-191, provide the signer address
-    // and an uncompressed secp256k1 public key (65 bytes) starting with 0x04.
+    // Verify a signature (example). For Ethereum EIP-191, provide the signer address.
+    // You may pass either an Ethereum address (recommended) or an uncompressed
+    // secp256k1 public key (65 bytes, 0x04-prefixed) as the "public key" parameter.
+    // Verification is address-based and recovers the signer from the signature.
     let signature = Signature::eip191(
         "0x<65-byte-signature-hex-rsv>",
         "0x1234567890123456789012345678901234567890",
     );
 
-    // Example uncompressed public key placeholder: 0x04 followed by 64 bytes (128 hex chars)
-    let public_key = PublicKeyFactory::ethereum("0x04<128-hex-chars-of-uncompressed-pubkey>");
+    // Pass the signer address as the key (address-only flow)
+    let public_key = PublicKeyFactory::ethereum(
+        "0x1234567890123456789012345678901234567890"
+    )?;
     let is_valid = verifier.verify(&message, &signature, &public_key).await?;
     println!("Signature valid: {}", is_valid);
 
@@ -110,6 +114,10 @@ let message_to_sign = eth_message.message_to_sign()?;
 
 // Create verifier with default backend (supports EIP-191 and EIP-1271)
 let verifier = VerifierFactory::ethereum();
+// EIP-191 address-only flow: pass the address as the key
+let addr_key = PublicKeyFactory::ethereum(
+    "0x1234567890123456789012345678901234567890"
+)?;
 ```
 
 ### Solana Example
@@ -368,17 +376,18 @@ impl PublicKey for BitcoinPublicKey {
 // Create verifier with default backend (Ethereum supports EIP-191 and EIP-1271)
 let verifier = VerifierFactory::ethereum();
 
-// Verify signature
-// For Ethereum, provide an uncompressed secp256k1 public key (65 bytes) starting with 0x04.
-let public_key = PublicKeyFactory::ethereum("0x04<128-hex-chars-of-uncompressed-pubkey>");
+// Verify signature (Ethereum supports passing an address or uncompressed secp256k1 pubkey)
+// Address-only recommended:
+let public_key = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890")?;
 let is_valid = verifier.verify(&message, &signature, &public_key).await?;
 ```
 
 ### Ethereum Backend Configuration
 
 - The default Ethereum backend supports:
-  - EIP-191 (personal_sign) with 65-byte signatures (r|s|v)
-  - EIP-1271 (smart contract validation) by calling `isValidSignature` via RPC
+  - EIP-191 (personal_sign) with 65-byte signatures (r|s|v). The verifier recovers the signer
+    address from the signature and compares it to `message.address`/`signature.signer`.
+  - EIP-1271 (smart contract validation) by calling `isValidSignature` via RPC.
 - RPC URL resolution order for EIP-1271:
   - Explicit URL if you build the backend with one
   - `ETHEREUM_RPC_URL` env var
@@ -441,7 +450,7 @@ The default Ethereum backend validates EIP-1271 signatures by calling `isValidSi
 - `message.address` must equal the contract address (prevents cross-contract replay).
 - `signature.signer` must be the contract address.
 - `signature.signature` must be a 0x-prefixed even-length hex string (arbitrary length per contract).
-- A valid Ethereum uncompressed public key must still be provided to pass validation checks, but it is not used in EIP-1271 verification logic.
+- No public key is required for EIP-1271; the provided "public key" parameter is ignored by the verifier.
 
 Example:
 
@@ -462,9 +471,10 @@ let signature = Signature::eip1271(
     "0xContractAddress...",
 );
 
-let dummy_pubkey = PublicKeyFactory::ethereum("0x04<128-hex-chars-of-uncompressed-pubkey>");
+// You may pass an address as the key; it is not used by EIP-1271 verification
+let dummy_key = PublicKeyFactory::ethereum(contract_address)?;
 let verifier = VerifierFactory::ethereum();
-let ok = verifier.verify(&message, &signature, &dummy_pubkey).await?;
+let ok = verifier.verify(&message, &signature, &dummy_key).await?;
 ```
 
 ## Message Validation
