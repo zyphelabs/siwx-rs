@@ -138,12 +138,12 @@ impl SolanaEd25519Verifier {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::{prelude::*, PublicKeyFactory, Signature as SiwxSignature};
     use ed25519::signature::Signer;
     use ed25519_dalek::SigningKey;
     use serde_json::json;
     use solana_sdk::pubkey::Pubkey;
+    #[allow(deprecated)]
     use solana_sdk::system_program;
 
     fn now_rfc3339() -> String {
@@ -338,8 +338,6 @@ mod tests {
         let program_id = system_program::id();
 
         // Real PDA is derived from seeds ["siwx", [1,2,3]]
-        let seed_ok1 = b58_encode(b"siwx");
-        let seed_ok2 = b58_encode([1u8, 2, 3]);
         let (real_pda, _bump) = Pubkey::find_program_address(&[b"siwx", &[1, 2, 3]], &program_id);
         let account_b58 = real_pda.to_string();
 

@@ -3780,7 +3780,6 @@ dependencies = [
  "ed25519-dalek 2.2.0",
  "hex",
  "k256",
- "rand 0.8.5",
  "regex",
  "serde",
  "serde_json",
