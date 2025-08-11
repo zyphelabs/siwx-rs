@@ -134,11 +134,115 @@ let message_to_sign = sol_message.message_to_sign()?;
 let verifier = VerifierFactory::solana();
 ```
 
+### Solana Smart Accounts (PDAs) and Squads Compatibility
+
+The Solana backend supports smart accounts implemented as Program Derived Accounts (PDAs). Since PDAs cannot sign, SIWX must be signed by an authority key associated with the PDA. The verifier then:
+
+- Validates the SIWX message address equals the PDA derived from the provided seeds and program id
+- Verifies the Ed25519 signature against the authority public key
+
+To use this flow, provide the following in the `Signature` metadata:
+
+- `program_id`: the program id that owns the PDA (base58 string)
+- `pda_seeds`: JSON array of base58-encoded seed byte arrays used to derive the PDA (e.g. `["c2l3eA==", "AQID"]` if you base58-encode raw bytes; in most apps you will pass base58 of literal byte buffers you control)
+
+Example using an authority key for a PDA:
+
+```rust
+use siwx_rs::prelude::*;
+
+// Assume you already know the PDA and its program id/seeds used to derive it
+let program_id_b58 = "<PROGRAM_ID_BASE58>";
+let pda_address_b58 = "<PDA_ADDRESS_BASE58>";
+let pda_seeds_json = serde_json::json!(["<SEED1_BASE58>", "<SEED2_BASE58>"]).to_string();
+
+// Build SIWX message addressed to the PDA
+let message = SiwxMessage::new_with_chain(
+    "example.com",
+    pda_address_b58.to_string(),
+    "https://example.com/login",
+    "1",
+    chrono::Utc::now().to_rfc3339(),
+    SiwxMessage::generate_nonce(),
+    Chain::Solana,
+);
+
+// Authority signs the message (ed25519). `authority_pubkey_b58` is base58 of the authority key
+let sig_b58 = "<AUTHORITY_SIGNATURE_BASE58>";
+let authority_pubkey_b58 = "<AUTHORITY_PUBKEY_BASE58>";
+
+let signature = Signature::ed25519(sig_b58, authority_pubkey_b58)
+    .with_metadata("program_id", program_id_b58.to_string())
+    .with_metadata("pda_seeds", pda_seeds_json);
+
+let public_key = PublicKeyFactory::solana(pda_address_b58);
+let verifier = VerifierFactory::solana();
+let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+```
+
+Squads (SquadsX) vaults are PDAs. This flow is compatible with Squads as long as you use an authority key (e.g., a member key or relayer key) to sign off-chain and pass the correct `program_id` and `pda_seeds`. The verifier will confirm the PDA derivation and the authority signature.
+
+Notes:
+
+- This library does not (yet) enforce on-chain multisig policy (e.g., membership/threshold checks) for Squads. If you need that, you can layer an optional RPC-backed check to validate that the authority is authorized for the given vault before accepting the signature.
+- PDA derivation uses `solana_sdk::Pubkey::find_program_address` with the provided seeds; no RPC calls are made during verification.
+- For more about Squads, see the official docs: [Squads Protocol documentation](https://docs.squads.so/).
+
+#### Example: derive a Squads PDA and build metadata
+
+```rust
+use bs58;
+use hex;
+use siwx_rs::prelude::*;
+use solana_sdk::pubkey::Pubkey;
+use std::str::FromStr;
+
+// Replace with the real Squads v4 Program ID
+let program_id = Pubkey::from_str("<SQUADS_V4_PROGRAM_ID>").unwrap();
+
+// Replace with actual Squads seeds per their documentation.
+// Here we show two generic seed buffers as an example.
+let seed1: Vec<u8> = b"multisig".to_vec();
+let seed2: Vec<u8> = hex::decode("<MULTISIG_ID_HEX>").unwrap();
+
+// Derive the PDA address
+let (pda, _bump) = Pubkey::find_program_address(&[&seed1, &seed2], &program_id);
+let pda_address_b58 = pda.to_string();
+
+// Prepare pda_seeds metadata as base58-encoded seed buffers
+let pda_seeds_json = serde_json::json!([
+    bs58::encode(&seed1).into_string(),
+    bs58::encode(&seed2).into_string(),
+])
+.to_string();
+
+// Build the SIWX message addressed to the PDA
+let message = SiwxMessage::new_with_chain(
+    "example.com",
+    pda_address_b58.clone(),
+    "https://example.com/login",
+    "1",
+    chrono::Utc::now().to_rfc3339(),
+    SiwxMessage::generate_nonce(),
+    Chain::Solana,
+);
+
+// Authority signs the message off-chain (produce sig_b58, authority_pubkey_b58)
+let signature = Signature::ed25519(sig_b58, authority_pubkey_b58)
+    .with_metadata("program_id", program_id.to_string())
+    .with_metadata("pda_seeds", pda_seeds_json);
+
+let public_key = PublicKeyFactory::solana(pda_address_b58);
+let verifier = VerifierFactory::solana();
+let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+```
+
 ## Message Format
 
 The library generates messages following the EIP-4361 standard:
 
 ### Ethereum Format
+
 ```
 example.com wants you to sign in with your Ethereum account:
 0x1234567890123456789012345678901234567890
@@ -154,6 +258,7 @@ Expiration Time: 2024-01-01T01:00:00Z
 ```
 
 ### Solana Format
+
 ```
 example.com wants you to sign in with your Solana account:
 11111111111111111111111111111112
@@ -408,4 +513,4 @@ MIT License - see LICENSE file for details.
 - [ ] Web3 integration examples
 - [ ] Performance optimizations
 - [ ] More comprehensive documentation
-- [ ] CLI tool for message generation and verification 
+- [ ] CLI tool for message generation and verification
