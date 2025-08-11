@@ -455,6 +455,30 @@ let verifier = SignatureVerifier::new(Chain::Ethereum)
     .with_backend(Box::new(CustomEthereumBackend));
 ```
 
+## Signer vs Public Key (why both?)
+
+- **`Signature.signer` (authority)**: who produced the signature. This may be an EOA address, a smart contract wallet address (EIP-1271), or on Solana an authority key.
+- **`public_key` argument (account)**: the account being authenticated, tied to `SiwxMessage.address` (e.g., Ethereum address or Solana account/PDA).
+
+Backend behavior and checks:
+
+- **Ethereum EIP-191**
+
+  - Recover signer address from the signature and require it equals `message.address`.
+  - Also require `signature.signer == message.address` to avoid mismatches.
+  - The provided key can be an address or uncompressed secp256k1 public key; verification is address-based.
+
+- **Ethereum EIP-1271**
+
+  - `signature.signer` is the contract address and must equal `message.address`.
+  - Verifier calls `isValidSignature` on that contract; the `public_key` parameter is ignored.
+
+- **Solana Ed25519 (EOA and PDA)**
+  - If `signature.signer == public_key.as_string()` (EOA), verify directly against that key.
+  - Otherwise treat as PDA flow: provide `program_id` and `pda_seeds` in `signature.metadata`. The verifier derives the PDA and requires it equals the account (`public_key`), then verifies signature with the authority in `signature.signer`.
+
+This separation enables EOAs and smart accounts while preventing cross-account replay and signer/account mismatches.
+
 ## Smart Contract Wallet Support (EIP-1271)
 
 The default Ethereum backend validates EIP-1271 signatures by calling `isValidSignature` on the contract specified by `signature.signer`. Requirements:
