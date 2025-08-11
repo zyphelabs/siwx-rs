@@ -36,7 +36,7 @@ siwx-rs = { version = "0.1.0", features = ["full"] }
 ### Feature Flags
 
 - `default`: Core functionality only
-- `ethereum`: Ethereum-specific dependencies (alloy-primitives, alloy-json-abi)
+- `ethereum`: Ethereum-specific dependencies (Alloy meta crate)
 - `solana`: Solana-specific dependencies (solana-sdk, bs58, ed25519-dalek)
 - `full`: All features enabled
 
@@ -69,13 +69,19 @@ async fn main() -> SiwxResult<()> {
     // Create a verifier
     let verifier = VerifierFactory::ethereum();
 
-    // Verify a signature (example)
+    // Verify a signature (example). For Ethereum EIP-191, provide the signer address.
+    // You may pass either an Ethereum address (recommended) or an uncompressed
+    // secp256k1 public key (65 bytes, 0x04-prefixed) as the "public key" parameter.
+    // Verification is address-based and recovers the signer from the signature.
     let signature = Signature::eip191(
-        "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
+        "0x<65-byte-signature-hex-rsv>",
         "0x1234567890123456789012345678901234567890",
     );
 
-    let public_key = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890")?;
+    // Pass the signer address as the key (address-only flow)
+    let public_key = PublicKeyFactory::ethereum(
+        "0x1234567890123456789012345678901234567890"
+    )?;
     let is_valid = verifier.verify(&message, &signature, &public_key).await?;
     println!("Signature valid: {}", is_valid);
 
@@ -106,8 +112,12 @@ let eth_message = SiwxMessage::new_with_chain(
 // Get EIP-191 formatted message
 let message_to_sign = eth_message.message_to_sign()?;
 
-// Create verifier with default backend
+// Create verifier with default backend (supports EIP-191 and EIP-1271)
 let verifier = VerifierFactory::ethereum();
+// EIP-191 address-only flow: pass the address as the key
+let addr_key = PublicKeyFactory::ethereum(
+    "0x1234567890123456789012345678901234567890"
+)?;
 ```
 
 ### Solana Example
@@ -281,10 +291,8 @@ The library provides a trait-based abstraction for public keys, making it easy t
 ```rust
 use siwx_rs::prelude::*;
 
-// Create Ethereum public key
-let eth_public_key = PublicKeyFactory::ethereum(
-    "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
-)?;
+// Create Ethereum public key (uncompressed 65-byte secp256k1, 0x04 + 64 bytes)
+let eth_public_key = PublicKeyFactory::ethereum("0x04<128-hex-chars-of-uncompressed-pubkey>");
 
 // Create Solana public key
 let sol_public_key = PublicKeyFactory::solana("11111111111111111111111111111112");
@@ -310,8 +318,9 @@ if eth_public_key.supports_signature_type(&SignatureType::Eip191) {
     println!("Supports EIP-191 signatures");
 }
 
-// Get address from public key
-let address = eth_public_key.address()?;
+// Get address from public key (requires that the key was constructed with a known address,
+// or a future version of this library adds on-the-fly derivation)
+let address = eth_public_key.address()?; // may error if address derivation is not available
 ```
 
 ### Extending for New Chains
@@ -364,12 +373,42 @@ impl PublicKey for BitcoinPublicKey {
 ### Using Default Backends
 
 ```rust
-// Create verifier with default backend
+// Create verifier with default backend (Ethereum supports EIP-191 and EIP-1271)
 let verifier = VerifierFactory::ethereum();
 
-// Verify signature
-let public_key = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890")?;
+// Verify signature (Ethereum supports passing an address or uncompressed secp256k1 pubkey)
+// Address-only recommended:
+let public_key = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890")?;
 let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+```
+
+### Ethereum Backend Configuration
+
+- The default Ethereum backend supports:
+  - EIP-191 (personal_sign) with 65-byte signatures (r|s|v). The verifier recovers the signer
+    address from the signature and compares it to `message.address`/`signature.signer`.
+  - EIP-1271 (smart contract validation) by calling `isValidSignature` via RPC.
+- RPC URL resolution order for EIP-1271:
+  - Explicit URL if you build the backend with one
+  - `ETHEREUM_RPC_URL` env var
+  - `ETH_RPC_URL` env var
+  - Fallback: a public Infura mainnet endpoint
+
+To set an explicit RPC URL, construct the verifier with the backend manually (feature `ethereum` must be enabled):
+
+```rust
+use siwx_rs::prelude::*;
+#[cfg(feature = "ethereum")]
+use siwx_rs::backend::ethereum::EthereumSecp256k1Verifier;
+
+let verifier = SignatureVerifier::new(Chain::Ethereum)
+    .with_backend(Box::new(EthereumSecp256k1Verifier::with_rpc_url("https://mainnet.infura.io/v3/<KEY>")));
+```
+
+Or set an environment variable (no code changes needed):
+
+```bash
+export ETHEREUM_RPC_URL="https://mainnet.infura.io/v3/<KEY>"
 ```
 
 ### Custom Backend Implementation
@@ -396,9 +435,7 @@ impl SignatureVerifierBackend for CustomEthereumBackend {
         Chain::Ethereum
     }
 
-    fn supported_signature_types(&self) -> Vec<SignatureType> {
-        vec![SignatureType::Eip191, SignatureType::Eip1271]
-    }
+    fn supported_signature_types(&self) -> Vec<SignatureType> { vec![SignatureType::Eip191, SignatureType::Eip1271] }
 }
 
 // Use custom backend
@@ -406,41 +443,38 @@ let verifier = SignatureVerifier::new(Chain::Ethereum)
     .with_backend(Box::new(CustomEthereumBackend));
 ```
 
-## Smart Contract Wallet Support
+## Smart Contract Wallet Support (EIP-1271)
 
-The library is designed to support smart contract wallets through EIP-1271:
+The default Ethereum backend validates EIP-1271 signatures by calling `isValidSignature` on the contract specified by `signature.signer`. Requirements:
+
+- `message.address` must equal the contract address (prevents cross-contract replay).
+- `signature.signer` must be the contract address.
+- `signature.signature` must be a 0x-prefixed even-length hex string (arbitrary length per contract).
+- No public key is required for EIP-1271; the provided "public key" parameter is ignored by the verifier.
+
+Example:
 
 ```rust
-// Create EIP-1271 signature for smart contract wallet
-let signature = Signature::eip1271(
-    "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-    "0x1234567890123456789012345678901234567890", // Contract address
+use siwx_rs::prelude::*;
+
+let message = SiwxMessage::new(
+    "example.com",
+    "0xContractAddress...", // same as the contract address below
+    "https://example.com/login",
+    "1",
+    "2024-01-01T00:00:00Z",
+    "nonce123",
 );
 
-// Custom backend for EIP-1271 verification
-struct Eip1271Backend;
+let signature = Signature::eip1271(
+    "0x<contract-defined-signature-hex>",
+    "0xContractAddress...",
+);
 
-#[async_trait]
-impl SignatureVerifierBackend for Eip1271Backend {
-    async fn verify(
-        &self,
-        message: &SiwxMessage,
-        signature: &Signature,
-        public_key: &dyn PublicKey,
-    ) -> SiwxResult<bool> {
-        // Call isValidSignature on the contract
-        // This would typically involve an RPC call
-        Ok(true)
-    }
-
-    fn supported_chain(&self) -> Chain {
-        Chain::Ethereum
-    }
-
-    fn supported_signature_types(&self) -> Vec<SignatureType> {
-        vec![SignatureType::Eip1271]
-    }
-}
+// You may pass an address as the key; it is not used by EIP-1271 verification
+let dummy_key = PublicKeyFactory::ethereum(contract_address)?;
+let verifier = VerifierFactory::ethereum();
+let ok = verifier.verify(&message, &signature, &dummy_key).await?;
 ```
 
 ## Message Validation
