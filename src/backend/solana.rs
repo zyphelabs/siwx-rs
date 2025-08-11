@@ -101,13 +101,13 @@ impl SolanaEd25519Verifier {
         let key_bytes = bs58::decode(key_b58)
             .into_vec()
             .map_err(|e| SiwxError::InvalidPublicKey(format!("Invalid base58 public key: {e}")))?;
-        if key_bytes.len() != 32 {
-            return Err(SiwxError::InvalidPublicKey(format!(
+        let key_array: [u8; 32] = <[u8; 32]>::try_from(key_bytes.as_slice()).map_err(|_| {
+            SiwxError::InvalidPublicKey(format!(
                 "Ed25519 public key must be 32 bytes, got {}",
                 key_bytes.len()
-            )));
-        }
-        VerifyingKey::from_bytes(&key_bytes.try_into().unwrap())
+            ))
+        })?;
+        VerifyingKey::from_bytes(&key_array)
             .map_err(|e| SiwxError::InvalidPublicKey(format!("Invalid ed25519 public key: {e}")))
     }
 
