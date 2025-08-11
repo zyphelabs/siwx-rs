@@ -144,7 +144,7 @@ The Solana backend supports smart accounts implemented as Program Derived Accoun
 To use this flow, provide the following in the `Signature` metadata:
 
 - `program_id`: the program id that owns the PDA (base58 string)
-- `pda_seeds`: JSON array of base58-encoded seed byte arrays used to derive the PDA (e.g. `["c2l3eA==", "AQID"]` if you base58-encode raw bytes; in most apps you will pass base58 of literal byte buffers you control)
+- `pda_seeds`: JSON array of base58-encoded seed byte arrays used to derive the PDA (e.g., `["<SEED1_BASE58>", "<SEED2_BASE58>"]`). Do not use base64. If you have raw bytes, encode each with base58 (e.g., `bs58::encode(&seed_bytes).into_string()`).
 
 Example using an authority key for a PDA:
 
