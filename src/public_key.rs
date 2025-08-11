@@ -1,6 +1,10 @@
 use crate::{Chain, SiwxError, SiwxResult};
+#[cfg(feature = "ethereum")]
+use alloy::primitives::{keccak256, Address};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+#[cfg(feature = "ethereum")]
+use std::str::FromStr;
 
 /// Trait for blockchain-specific public key implementations
 pub trait PublicKey: Send + Sync + fmt::Debug + fmt::Display {
@@ -24,6 +28,170 @@ pub trait PublicKey: Send + Sync + fmt::Debug + fmt::Display {
 
     /// Get the key type identifier
     fn key_type(&self) -> &'static str;
+}
+
+/// Ethereum address wrapper implementing `PublicKey` for address-only flows
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EthereumAddress {
+    /// The address (alloy Address when ethereum feature enabled; hex string otherwise)
+    #[cfg(feature = "ethereum")]
+    pub address: Address,
+    #[cfg(not(feature = "ethereum"))]
+    pub address: String,
+}
+
+impl EthereumAddress {
+    pub fn new(address: impl Into<String>) -> Self {
+        let addr = address.into();
+        #[cfg(feature = "ethereum")]
+        {
+            let parsed = Address::from_str(addr.as_str()).expect("invalid ethereum address");
+            Self { address: parsed }
+        }
+        #[cfg(not(feature = "ethereum"))]
+        {
+            let mut addr = addr;
+            if !addr.starts_with("0x") {
+                addr = format!("0x{}", addr);
+            }
+            Self { address: addr }
+        }
+    }
+}
+
+impl PublicKey for EthereumAddress {
+    fn chain(&self) -> Chain {
+        Chain::Ethereum
+    }
+
+    fn as_string(&self) -> String {
+        #[cfg(feature = "ethereum")]
+        {
+            format!("0x{:x}", self.address)
+        }
+        #[cfg(not(feature = "ethereum"))]
+        {
+            self.address.clone()
+        }
+    }
+
+    fn as_bytes(&self) -> SiwxResult<Vec<u8>> {
+        #[cfg(feature = "ethereum")]
+        {
+            Ok(self.address.0.to_vec())
+        }
+        #[cfg(not(feature = "ethereum"))]
+        {
+            let hex_part = self.address.strip_prefix("0x").unwrap_or(&self.address);
+            hex::decode(hex_part)
+                .map_err(|e| SiwxError::InvalidPublicKey(format!("Invalid hex encoding: {}", e)))
+        }
+    }
+
+    fn validate(&self) -> SiwxResult<()> {
+        Ok(())
+    }
+
+    fn address(&self) -> SiwxResult<String> {
+        Ok(self.as_string())
+    }
+
+    fn supports_signature_type(&self, signature_type: &crate::SignatureType) -> bool {
+        matches!(
+            signature_type,
+            crate::SignatureType::Eip191 | crate::SignatureType::Eip1271
+        )
+    }
+
+    fn key_type(&self) -> &'static str {
+        "address"
+    }
+}
+
+impl fmt::Display for EthereumAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.address)
+    }
+}
+
+/// Unified Ethereum key that can be either an address or a public key
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EthereumKey {
+    Address(EthereumAddress),
+    PublicKey(EthereumPublicKey),
+}
+
+impl EthereumKey {
+    pub fn from_string(key: impl Into<String>) -> Self {
+        let s = key.into();
+        let s_norm = if s.starts_with("0x") {
+            s
+        } else {
+            format!("0x{}", s)
+        };
+        if s_norm.len() == 42 {
+            EthereumKey::Address(EthereumAddress::new(s_norm))
+        } else {
+            EthereumKey::PublicKey(EthereumPublicKey::new(s_norm))
+        }
+    }
+}
+
+impl PublicKey for EthereumKey {
+    fn chain(&self) -> Chain {
+        Chain::Ethereum
+    }
+
+    fn as_string(&self) -> String {
+        match self {
+            EthereumKey::Address(a) => a.as_string(),
+            EthereumKey::PublicKey(pk) => pk.as_string(),
+        }
+    }
+
+    fn as_bytes(&self) -> SiwxResult<Vec<u8>> {
+        match self {
+            EthereumKey::Address(a) => a.as_bytes(),
+            EthereumKey::PublicKey(pk) => pk.as_bytes(),
+        }
+    }
+
+    fn validate(&self) -> SiwxResult<()> {
+        match self {
+            EthereumKey::Address(a) => a.validate(),
+            EthereumKey::PublicKey(pk) => pk.validate(),
+        }
+    }
+
+    fn address(&self) -> SiwxResult<String> {
+        match self {
+            EthereumKey::Address(a) => a.address(),
+            EthereumKey::PublicKey(pk) => pk.address(),
+        }
+    }
+
+    fn supports_signature_type(&self, signature_type: &crate::SignatureType) -> bool {
+        match self {
+            EthereumKey::Address(a) => a.supports_signature_type(signature_type),
+            EthereumKey::PublicKey(pk) => pk.supports_signature_type(signature_type),
+        }
+    }
+
+    fn key_type(&self) -> &'static str {
+        match self {
+            EthereumKey::Address(a) => a.key_type(),
+            EthereumKey::PublicKey(pk) => pk.key_type(),
+        }
+    }
+}
+
+impl fmt::Display for EthereumKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            EthereumKey::Address(a) => write!(f, "{}", a),
+            EthereumKey::PublicKey(pk) => write!(f, "{}", pk),
+        }
+    }
 }
 
 /// Ethereum public key implementation
@@ -64,17 +232,28 @@ impl EthereumPublicKey {
         }
     }
 
-    /// Derive Ethereum address from public key
+    /// Derive Ethereum address from public key (keccak256 of uncompressed pubkey without prefix)
     fn derive_address(&self) -> SiwxResult<String> {
-        // In a real implementation, you would use a proper crypto library
-        // like ethers-rs or alloy-rs to derive the address from the public key
-        // For now, we'll return a placeholder
         if let Some(ref addr) = self.address {
-            Ok(addr.clone())
-        } else {
-            // This is a simplified implementation - in practice you'd use proper keccak256
+            return Ok(addr.clone());
+        }
+
+        let bytes = self.as_bytes()?;
+        if bytes.len() != 65 || bytes[0] != 0x04 {
+            return Err(SiwxError::InvalidPublicKey(
+                "Ethereum public key must be 65 bytes uncompressed (0x04 + 64 bytes)".into(),
+            ));
+        }
+        #[cfg(feature = "ethereum")]
+        {
+            let hash = keccak256(&bytes[1..]);
+            let addr = Address::from_slice(&hash[12..]);
+            Ok(format!("0x{:x}", addr))
+        }
+        #[cfg(not(feature = "ethereum"))]
+        {
             Err(SiwxError::InvalidPublicKey(
-                "Address derivation not implemented".into(),
+                "Ethereum feature not enabled for address derivation".into(),
             ))
         }
     }
@@ -242,8 +421,8 @@ impl fmt::Display for SolanaPublicKey {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum PublicKeyEnum {
-    /// Ethereum public key
-    Ethereum(EthereumPublicKey),
+    /// Ethereum key (address or uncompressed public key)
+    Ethereum(EthereumKey),
     /// Solana public key
     Solana(SolanaPublicKey),
 }
@@ -251,7 +430,7 @@ pub enum PublicKeyEnum {
 impl PublicKeyEnum {
     /// Create an Ethereum public key
     pub fn ethereum(key: impl Into<String>) -> Self {
-        Self::Ethereum(EthereumPublicKey::new(key))
+        Self::Ethereum(EthereumKey::from_string(key))
     }
 
     /// Create a Solana public key
@@ -269,7 +448,7 @@ impl PublicKeyEnum {
 
     /// Try to detect the chain from the key format
     pub fn detect_chain(key: &str) -> Option<Chain> {
-        if key.starts_with("0x") && key.len() == 132 {
+        if key.starts_with("0x") && (key.len() == 132 || key.len() == 42) {
             Some(Chain::Ethereum)
         } else if key
             .chars()
@@ -344,8 +523,8 @@ impl fmt::Display for PublicKeyEnum {
     }
 }
 
-impl From<EthereumPublicKey> for PublicKeyEnum {
-    fn from(pk: EthereumPublicKey) -> Self {
+impl From<EthereumKey> for PublicKeyEnum {
+    fn from(pk: EthereumKey) -> Self {
         Self::Ethereum(pk)
     }
 }
@@ -423,6 +602,10 @@ mod tests {
             Some(Chain::Ethereum)
         );
         assert_eq!(
+            PublicKeyEnum::detect_chain("0x1234567890123456789012345678901234567890"),
+            Some(Chain::Ethereum)
+        );
+        assert_eq!(
             PublicKeyEnum::detect_chain("11111111111111111111111111111112"),
             Some(Chain::Solana)
         );
@@ -444,6 +627,11 @@ mod tests {
         assert!(eth_pk.supports_signature_type(&crate::SignatureType::Eip191));
         assert!(eth_pk.supports_signature_type(&crate::SignatureType::Eip1271));
         assert!(!eth_pk.supports_signature_type(&crate::SignatureType::Ed25519));
+
+        let eth_addr = EthereumAddress::new("0x1234567890123456789012345678901234567890");
+        assert!(eth_addr.supports_signature_type(&crate::SignatureType::Eip191));
+        assert!(eth_addr.supports_signature_type(&crate::SignatureType::Eip1271));
+        assert!(!eth_addr.supports_signature_type(&crate::SignatureType::Ed25519));
 
         let sol_pk = SolanaPublicKey::new("11111111111111111111111111111112");
         assert!(!sol_pk.supports_signature_type(&crate::SignatureType::Eip191));
