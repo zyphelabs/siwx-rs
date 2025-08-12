@@ -7,22 +7,26 @@ use crate::{
 use alloy::primitives::{keccak256, Address, Signature as AlloySignature};
 use alloy::{providers::ProviderBuilder, sol};
 use async_trait::async_trait;
-use std::env;
 use std::str::FromStr;
+
+/// Default public Ethereum RPC provider used when no URL is specified by the user
+const DEFAULT_PROVIDER_URL: &str = "https://mainnet.infura.io/v3/84842078b09946638c03157f83405213";
 
 /// Default Ethereum verifier using secp256k1
 pub struct EthereumSecp256k1Verifier {
-    rpc_url: Option<String>,
+    rpc_url: String,
 }
 
 impl EthereumSecp256k1Verifier {
     pub fn new() -> Self {
-        Self { rpc_url: None }
+        Self {
+            rpc_url: DEFAULT_PROVIDER_URL.to_string(),
+        }
     }
 
     pub fn with_rpc_url(rpc_url: impl Into<String>) -> Self {
         Self {
-            rpc_url: Some(rpc_url.into()),
+            rpc_url: rpc_url.into(),
         }
     }
 }
@@ -38,6 +42,14 @@ impl SignatureVerifierBackend for EthereumSecp256k1Verifier {
         match signature.signature_type {
             SignatureType::Eip191 => self.verify_eip191(message, signature, public_key).await,
             SignatureType::Eip1271 => self.verify_eip1271(message, signature, public_key).await,
+            SignatureType::EthereumAutodetect => {
+                // Route based on whether signer matches the message address
+                if signature.signer.eq_ignore_ascii_case(&message.address) {
+                    self.verify_eip191(message, signature, public_key).await
+                } else {
+                    self.verify_eip1271(message, signature, public_key).await
+                }
+            }
             _ => Err(SiwxError::VerificationFailed(
                 "Unsupported signature type for Ethereum".into(),
             )),
@@ -49,7 +61,11 @@ impl SignatureVerifierBackend for EthereumSecp256k1Verifier {
     }
 
     fn supported_signature_types(&self) -> Vec<SignatureType> {
-        vec![SignatureType::Eip191, SignatureType::Eip1271]
+        vec![
+            SignatureType::Eip191,
+            SignatureType::Eip1271,
+            SignatureType::EthereumAutodetect,
+        ]
     }
 }
 
@@ -107,24 +123,9 @@ impl EthereumSecp256k1Verifier {
         signature: &Signature,
         _public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
-        // Load provider URL from self, then .env (ETHEREUM_RPC_URL/ETH_RPC_URL),
-        // and finally fallback to a default public mainnet provider
-        // Safe to call multiple times; dotenvy is idempotent.
-        let _ = dotenvy::dotenv();
-        const DEFAULT_PROVIDER_URL: &str =
-            "https://mainnet.infura.io/v3/84842078b09946638c03157f83405213";
-
-        let effective_url = self
-            .rpc_url
-            .as_ref()
-            .cloned()
-            .or_else(|| env::var("ETHEREUM_RPC_URL").ok())
-            .or_else(|| env::var("ETH_RPC_URL").ok())
-            .unwrap_or_else(|| DEFAULT_PROVIDER_URL.to_string());
-
         // Build provider (http or ws based on URL scheme)
         let provider = ProviderBuilder::new()
-            .connect(&effective_url)
+            .connect(&self.rpc_url)
             .await
             .map_err(|e| {
                 SiwxError::VerificationFailed(format!("Failed to connect provider: {e}"))
@@ -197,6 +198,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_autodetect_eip191_verify_success() {
+        // Use a known private key (Anvil default #0)
+        let priv_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+        let signer: PrivateKeySigner = priv_key.parse().unwrap();
+        let addr = format!("0x{:x}", signer.address());
+
+        // Build SIWX message referencing the signer address
+        let message = crate::SiwxMessage::new(
+            "example.com",
+            &addr,
+            "https://example.com/login",
+            "1",
+            "2024-01-01T00:00:00Z",
+            "nonce123",
+        );
+
+        let msg_to_sign = message.message_to_sign().unwrap();
+        let sig = signer.sign_message(msg_to_sign.as_bytes()).await.unwrap();
+        let sig_hex = format!("0x{}", hex::encode(sig.as_bytes()));
+        let signature = crate::Signature::ethereum_autodetect(sig_hex, addr.clone());
+
+        // Provide address as key
+        let pk = EthereumAddress::new(addr.clone()).unwrap();
+
+        let verifier = VerifierFactory::ethereum();
+        let result = verifier.verify(&message, &signature, &pk).await.unwrap();
+        assert!(result);
+    }
+
+    #[ignore]
+    #[tokio::test]
+    async fn test_autodetect_routes_to_eip1271_network_vector() {
+        // This test mirrors the EIP-1271 network tests but uses autodetect
+        let message_text = "localhost:4361 wants you to sign in with your Ethereum account:\n0xa5b3A53800cD49669F34DE80f2C569c6D4Ca3009\n\nSIWE Notepad Example\n\nURI: http://localhost:4361\nVersion: 1\nChain ID: 1\nNonce: FbYd6TNB4m0IUHDG7\nIssued At: 2022-04-19T18:55:04.444Z";
+        let signature_hex = "0x00193f8bb87a8bd4a8367a47ee477c62aec984830ec59e730b28d1ec54669eab450b9f3108a5c435648691c5766b35e2f13b8fb29f46298bb378ac34597d7e271c";
+        let contract_address = "0xa5b3A53800cD49669F34DE80f2C569c6D4Ca3009";
+
+        let message = crate::SiwxMessage::new(
+            "localhost:4361",
+            contract_address,
+            "http://localhost:4361",
+            "1",
+            "2022-04-19T18:55:04.444Z",
+            "FbYd6TNB4m0IUHDG7",
+        )
+        .with_statement("SIWE Notepad Example");
+        assert_eq!(message.message_to_sign().unwrap(), message_text);
+
+        // signer != message.address is a contract, so autodetect should route to EIP-1271
+        let sig = crate::Signature::ethereum_autodetect(signature_hex, contract_address);
+        let dummy_pubkey = EthereumPublicKey::new("0x04".to_string() + &"11".repeat(64));
+        let verifier = SignatureVerifier::new(Chain::Ethereum).with_backend(Box::new(
+            EthereumSecp256k1Verifier::with_rpc_url(test_provider_url()),
+        ));
+        let ok = verifier
+            .verify(&message, &sig, &dummy_pubkey)
+            .await
+            .unwrap();
+        assert!(ok);
+    }
     async fn test_eip191_verify_success() {
         // Use a known private key (Anvil default #0)
         let priv_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";

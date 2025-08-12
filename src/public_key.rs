@@ -696,13 +696,13 @@ impl PublicKeyFactory {
 
 #[cfg(test)]
 mod tests {
-    use super::PublicKey;
     #[cfg(all(feature = "ethereum", feature = "solana"))]
     use super::{Chain, EthereumAddress, EthereumPublicKey, SolanaPublicKey};
     #[cfg(all(feature = "ethereum", not(feature = "solana")))]
     use super::{Chain, EthereumPublicKey};
     #[cfg(all(not(feature = "ethereum"), feature = "solana"))]
     use super::{Chain, SolanaPublicKey};
+    use super::{PublicKey, PublicKeyEnum, PublicKeyFactory};
 
     #[cfg(feature = "ethereum")]
     #[test]

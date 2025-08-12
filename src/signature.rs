@@ -12,6 +12,8 @@ pub enum SignatureType {
     Eip191,
     /// EIP-1271 smart contract signature (Ethereum)
     Eip1271,
+    /// Ethereum auto-detect: route to EIP-191 if signer matches message address, otherwise EIP-1271
+    EthereumAutodetect,
     /// Ed25519 signature (Solana)
     Ed25519,
     /// Custom signature type
@@ -29,7 +31,10 @@ impl SignatureType {
 
     /// Check if this signature type supports smart contract wallets
     pub fn supports_smart_contracts(&self) -> bool {
-        matches!(self, SignatureType::Eip1271)
+        matches!(
+            self,
+            SignatureType::Eip1271 | SignatureType::EthereumAutodetect
+        )
     }
 }
 
@@ -38,6 +43,7 @@ impl fmt::Display for SignatureType {
         match self {
             SignatureType::Eip191 => write!(f, "EIP-191"),
             SignatureType::Eip1271 => write!(f, "EIP-1271"),
+            SignatureType::EthereumAutodetect => write!(f, "EthereumAutodetect"),
             SignatureType::Ed25519 => write!(f, "Ed25519"),
             SignatureType::Custom(s) => write!(f, "Custom({})", s),
         }
@@ -89,6 +95,11 @@ impl Signature {
         Self::new(SignatureType::Ed25519, signature, signer)
     }
 
+    /// Create an Ethereum auto-detect signature (chooses EIP-191 vs EIP-1271 at verify time)
+    pub fn ethereum_autodetect(signature: impl Into<String>, signer: impl Into<String>) -> Self {
+        Self::new(SignatureType::EthereumAutodetect, signature, signer)
+    }
+
     /// Add metadata to the signature
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
@@ -100,6 +111,8 @@ impl Signature {
         match self.signature_type {
             SignatureType::Eip191 => self.validate_ethereum_eip191_format(),
             SignatureType::Eip1271 => self.validate_eip1271_format(),
+            // Allow generic hex for autodetect; specific constraints enforced during backend verification
+            SignatureType::EthereumAutodetect => self.validate_eip1271_format(),
             SignatureType::Ed25519 => self.validate_solana_format(),
             SignatureType::Custom(_) => Ok(()), // Custom types are not validated
         }
@@ -179,7 +192,7 @@ impl Signature {
     /// Get the signature as bytes
     pub fn as_bytes(&self) -> SiwxResult<Vec<u8>> {
         match self.signature_type {
-            SignatureType::Eip191 | SignatureType::Eip1271 => {
+            SignatureType::Eip191 | SignatureType::Eip1271 | SignatureType::EthereumAutodetect => {
                 // Remove 0x prefix and decode hex
                 let hex_part = self.signature.strip_prefix("0x").unwrap_or(&self.signature);
                 hex::decode(hex_part).map_err(|e| {
@@ -223,6 +236,9 @@ impl Signature {
             SignatureType::Eip1271 => Err(SiwxError::InvalidSignature(
                 "Recovery ID is not available for EIP-1271 signatures".into(),
             )),
+            SignatureType::EthereumAutodetect => Err(SiwxError::InvalidSignature(
+                "Recovery ID only available for EIP-191 Ethereum signatures".into(),
+            )),
             _ => Err(SiwxError::InvalidSignature(
                 "Recovery ID only available for EIP-191 Ethereum signatures".into(),
             )),
@@ -245,6 +261,9 @@ impl Signature {
             }
             SignatureType::Eip1271 => Err(SiwxError::InvalidSignature(
                 "R and S components are not available for EIP-1271 signatures".into(),
+            )),
+            SignatureType::EthereumAutodetect => Err(SiwxError::InvalidSignature(
+                "R and S components only available for EIP-191 Ethereum signatures".into(),
             )),
             _ => Err(SiwxError::InvalidSignature(
                 "R and S components only available for EIP-191 Ethereum signatures".into(),

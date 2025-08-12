@@ -394,33 +394,66 @@ let public_key = PublicKeyFactory::for_chain(
 let is_valid = verifier.verify(&message, &signature, &public_key).await?;
 ```
 
+### EthereumAutodetect signature type
+
+When you don't know upfront whether the signer is an EOA (EIP-191) or a smart contract wallet (EIP-1271), use `EthereumAutodetect`. The verifier will:
+
+- Route to EIP-191 if `signature.signer` equals `SiwxMessage.address` (case-insensitive)
+- Otherwise, route to EIP-1271 and call `isValidSignature` on `signature.signer`
+
+```rust
+use siwx_rs::prelude::*;
+
+// Build a standard SIWX message
+let message = SiwxMessage::new(
+    "example.com",
+    "0x1234567890123456789012345678901234567890",
+    "https://example.com/login",
+    "1",
+    "2024-01-01T00:00:00Z",
+    "nonce123",
+);
+
+// Produce a signature off-chain, then wrap it with autodetect
+let signature = Signature::ethereum_autodetect(
+    "0x<hex-signature>",
+    "0x1234567890123456789012345678901234567890", // signer (EOA or contract)
+);
+
+// Provide the account key (address is recommended for Ethereum)
+let key = PublicKeyFactory::for_chain(
+    "0x1234567890123456789012345678901234567890",
+    Chain::Ethereum,
+)?;
+
+let verifier = VerifierFactory::ethereum();
+let ok = verifier.verify(&message, &signature, &key).await?;
+```
+
 ### Ethereum Backend Configuration
 
 - The default Ethereum backend supports:
   - EIP-191 (personal_sign) with 65-byte signatures (r|s|v). The verifier recovers the signer
     address from the signature and compares it to `message.address`/`signature.signer`.
   - EIP-1271 (smart contract validation) by calling `isValidSignature` via RPC.
-- RPC URL resolution order for EIP-1271:
-  - Explicit URL if you build the backend with one
-  - `ETHEREUM_RPC_URL` env var
-  - `ETH_RPC_URL` env var
-  - Fallback: a public Infura mainnet endpoint
+- RPC URL
+  - Defaults to a public Infura mainnet endpoint in `new()`.
+  - You can override it with `with_rpc_url(...)` when constructing the backend; there is no environment-variable fallback.
 
-To set an explicit RPC URL, construct the verifier with the backend manually (feature `ethereum` must be enabled):
+Construct the verifier (feature `ethereum` must be enabled):
 
 ```rust
 use siwx_rs::prelude::*;
 #[cfg(feature = "ethereum")]
 use siwx_rs::backend::ethereum::EthereumSecp256k1Verifier;
 
+// Default URL (public Infura mainnet) is used by `new()`
 let verifier = SignatureVerifier::new(Chain::Ethereum)
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new()));
+
+// Or override with your own provider URL
+let verifier_custom = SignatureVerifier::new(Chain::Ethereum)
     .with_backend(Box::new(EthereumSecp256k1Verifier::with_rpc_url("https://mainnet.infura.io/v3/<KEY>")));
-```
-
-Or set an environment variable (no code changes needed):
-
-```bash
-export ETHEREUM_RPC_URL="https://mainnet.infura.io/v3/<KEY>"
 ```
 
 ### Custom Backend Implementation
