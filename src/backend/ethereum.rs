@@ -1,53 +1,43 @@
 #![cfg(feature = "ethereum")]
 
 use crate::{
-    verifier::SignatureVerifierBackend, Chain, PublicKey, Signature, SignatureType, SiwxError,
-    SiwxMessage, SiwxResult,
+    verifier::SignatureVerifierBackend, Chain, Signature, SignatureType, SiwxError, SiwxMessage,
+    SiwxResult,
 };
 use alloy::primitives::{keccak256, Address, Signature as AlloySignature};
 use alloy::{providers::ProviderBuilder, sol};
 use async_trait::async_trait;
 use std::str::FromStr;
 
-/// Default public Ethereum RPC provider used when no URL is specified by the user
-const DEFAULT_PROVIDER_URL: &str = "https://mainnet.infura.io/v3/84842078b09946638c03157f83405213";
-
 /// Default Ethereum verifier using secp256k1
 pub struct EthereumSecp256k1Verifier {
-    rpc_url: String,
+    rpc_url: Option<String>,
 }
 
 impl EthereumSecp256k1Verifier {
-    pub fn new() -> Self {
+    pub fn new(provider_url: Option<String>) -> Self {
         Self {
-            rpc_url: DEFAULT_PROVIDER_URL.to_string(),
-        }
-    }
-
-    pub fn with_rpc_url(rpc_url: impl Into<String>) -> Self {
-        Self {
-            rpc_url: rpc_url.into(),
+            rpc_url: provider_url,
         }
     }
 }
 
 #[async_trait]
 impl SignatureVerifierBackend for EthereumSecp256k1Verifier {
-    async fn verify(
-        &self,
-        message: &SiwxMessage,
-        signature: &Signature,
-        public_key: &dyn PublicKey,
-    ) -> SiwxResult<bool> {
+    async fn verify(&self, message: &SiwxMessage, signature: &Signature) -> SiwxResult<bool> {
         match signature.signature_type {
-            SignatureType::Eip191 => self.verify_eip191(message, signature, public_key).await,
-            SignatureType::Eip1271 => self.verify_eip1271(message, signature, public_key).await,
+            SignatureType::Eip191 => self.verify_eip191(message, signature).await,
+            SignatureType::Eip1271 => self.verify_eip1271(message, signature).await,
             SignatureType::EthereumAutodetect => {
-                // Route based on whether signer matches the message address
-                if signature.signer.eq_ignore_ascii_case(&message.address) {
-                    self.verify_eip191(message, signature, public_key).await
+                // Route based on whether recovered signer equals the message address
+                let recovered: Address = self.recover_signer(message, signature).await?;
+                let message_addr = Address::from_str(message.address.as_str()).map_err(|e| {
+                    SiwxError::InvalidAddress(format!("Invalid message address: {e}"))
+                })?;
+                if recovered == message_addr {
+                    self.verify_eip191(message, signature).await
                 } else {
-                    self.verify_eip1271(message, signature, public_key).await
+                    self.verify_eip1271(message, signature).await
                 }
             }
             _ => Err(SiwxError::VerificationFailed(
@@ -70,48 +60,36 @@ impl SignatureVerifierBackend for EthereumSecp256k1Verifier {
 }
 
 impl EthereumSecp256k1Verifier {
+    async fn recover_signer(
+        &self,
+        message: &SiwxMessage,
+        signature: &Signature,
+    ) -> SiwxResult<Address> {
+        let msg = message.message_to_sign()?;
+        let sig_bytes = signature.as_bytes()?;
+        let alloy_sig = AlloySignature::try_from(&sig_bytes[..])
+            .map_err(|e| SiwxError::InvalidSignature(format!("Invalid signature: {e}")))?;
+        let recovered = alloy_sig
+            .recover_address_from_msg(msg.as_bytes())
+            .map_err(|e| {
+                SiwxError::VerificationFailed(format!(
+                    "Failed to recover address from signature: {e}"
+                ))
+            })?;
+        Ok(recovered)
+    }
+
     /// Verify EIP-191 personal_sign signature
     async fn verify_eip191(
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        _public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
-        // 1) Get raw message to sign (without EIP-191 prefix here)
-        let msg = message.message_to_sign()?;
+        let recovered: Address = self.recover_signer(message, signature).await?;
 
-        // 3) Parse signature bytes (65 bytes r|s|v)
-        let sig_bytes = signature.as_bytes()?;
-        if sig_bytes.len() != 65 {
-            return Err(SiwxError::InvalidSignature(
-                "Ethereum signature must be 65 bytes".into(),
-            ));
-        }
-
-        // Construct Signature from raw bytes.
-        let alloy_sig = AlloySignature::try_from(&sig_bytes[..])
-            .map_err(|e| SiwxError::InvalidSignature(format!("Invalid signature: {e}")))?;
-
-        // 4) Recover address from message (method applies the EIP-191 prefix internally)
-        let recovered: Address =
-            alloy_sig
-                .recover_address_from_msg(msg.as_bytes())
-                .map_err(|e| {
-                    SiwxError::VerificationFailed(format!(
-                        "Failed to recover address from signature: {e}"
-                    ))
-                })?;
-
-        // 5) Determine the expected address from the message/signature (addresses, not public keys)
         // Ensure the signature's signer matches the message address to prevent mismatches/replay.
         let message_addr = Address::from_str(message.address.as_str())
             .map_err(|e| SiwxError::InvalidAddress(format!("Invalid message address: {e}")))?;
-        let signer_addr = Address::from_str(signature.signer.as_str())
-            .map_err(|e| SiwxError::InvalidAddress(format!("Invalid signer address: {e}")))?;
-
-        if message_addr != signer_addr {
-            return Ok(false);
-        }
 
         Ok(recovered == message_addr)
     }
@@ -121,36 +99,23 @@ impl EthereumSecp256k1Verifier {
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        _public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
         // Build provider (http or ws based on URL scheme)
-        let provider = ProviderBuilder::new()
-            .connect(&self.rpc_url)
-            .await
-            .map_err(|e| {
-                SiwxError::VerificationFailed(format!("Failed to connect provider: {e}"))
-            })?;
+        let rpc_url = self.rpc_url.as_ref().ok_or_else(|| {
+            SiwxError::VerificationFailed("Ethereum RPC URL not configured in verifier".into())
+        })?;
+        let provider = ProviderBuilder::new().connect(rpc_url).await.map_err(|e| {
+            SiwxError::VerificationFailed(format!("Failed to connect provider: {e}"))
+        })?;
 
         // Compute EIP-191 hash of the message
         let msg = message.message_to_sign()?;
         let eth_signed_msg = format!("\x19Ethereum Signed Message:\n{}{}", msg.len(), msg);
         let hash = keccak256(eth_signed_msg.as_bytes());
 
-        // Parse contract address (the signer field should be the contract wallet address)
-        let contract_addr = Address::from_str(signature.signer.as_str()).map_err(|e| {
-            SiwxError::InvalidAddress(format!("Invalid contract address for EIP-1271: {e}"))
-        })?;
-
-        // Parse message address and ensure it matches the contract address to prevent
-        // cross-contract signature replay attacks.
-        let message_addr = Address::from_str(message.address.as_str()).map_err(|e| {
+        let contract_addr = Address::from_str(message.address.as_str()).map_err(|e| {
             SiwxError::InvalidAddress(format!("Invalid message address for EIP-1271: {e}"))
         })?;
-        if message_addr != contract_addr {
-            return Err(SiwxError::VerificationFailed(
-                "Signer does not match message address".into(),
-            ));
-        }
 
         // Use a minimal IERC1271 interface via sol! macro
         sol! {
@@ -179,15 +144,12 @@ impl EthereumSecp256k1Verifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        public_key::{EthereumAddress, EthereumPublicKey},
-        verifier::SignatureVerifier,
-        VerifierFactory,
-    };
+    use crate::verifier::SignatureVerifier;
     use alloy::signers::{local::PrivateKeySigner, Signer};
     use k256::{elliptic_curve::sec1::ToEncodedPoint, SecretKey};
     use std::env;
 
+    #[allow(dead_code)]
     fn uncompressed_pubkey_hex_from_privkey_hex(priv_hex: &str) -> String {
         let bytes = hex::decode(priv_hex.trim_start_matches("0x")).unwrap();
         let secret_key = SecretKey::from_slice(&bytes).unwrap();
@@ -202,12 +164,11 @@ mod tests {
         // Use a known private key (Anvil default #0)
         let priv_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
         let signer: PrivateKeySigner = priv_key.parse().unwrap();
-        let addr = format!("0x{:x}", signer.address());
 
         // Build SIWX message referencing the signer address
         let message = crate::SiwxMessage::new(
             "example.com",
-            &addr,
+            &format!("0x{:x}", signer.address()),
             "https://example.com/login",
             "1",
             "2024-01-01T00:00:00Z",
@@ -217,13 +178,12 @@ mod tests {
         let msg_to_sign = message.message_to_sign().unwrap();
         let sig = signer.sign_message(msg_to_sign.as_bytes()).await.unwrap();
         let sig_hex = format!("0x{}", hex::encode(sig.as_bytes()));
-        let signature = crate::Signature::ethereum_autodetect(sig_hex, addr.clone());
+        let signature = crate::Signature::ethereum_autodetect(sig_hex);
 
-        // Provide address as key
-        let pk = EthereumAddress::new(addr.clone()).unwrap();
-
-        let verifier = VerifierFactory::ethereum();
-        let result = verifier.verify(&message, &signature, &pk).await.unwrap();
+        let verifier = SignatureVerifier::new(Chain::Ethereum).with_backend(Box::new(
+            EthereumSecp256k1Verifier::new(Some(test_provider_url())),
+        ));
+        let result = verifier.verify(&message, &signature).await.unwrap();
         assert!(result);
     }
 
@@ -247,26 +207,19 @@ mod tests {
         assert_eq!(message.message_to_sign().unwrap(), message_text);
 
         // signer != message.address is a contract, so autodetect should route to EIP-1271
-        let sig = crate::Signature::ethereum_autodetect(signature_hex, contract_address);
-        let dummy_pubkey = EthereumPublicKey::new("0x04".to_string() + &"11".repeat(64));
+        let sig = crate::Signature::ethereum_autodetect(signature_hex);
         let verifier = SignatureVerifier::new(Chain::Ethereum).with_backend(Box::new(
-            EthereumSecp256k1Verifier::with_rpc_url(test_provider_url()),
+            EthereumSecp256k1Verifier::new(Some(test_provider_url())),
         ));
-        let ok = verifier
-            .verify(&message, &sig, &dummy_pubkey)
-            .await
-            .unwrap();
+        let ok = verifier.verify(&message, &sig).await.unwrap();
         assert!(ok);
     }
+    #[allow(dead_code)]
     async fn test_eip191_verify_success() {
         // Use a known private key (Anvil default #0)
         let priv_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
         let signer: PrivateKeySigner = priv_key.parse().unwrap();
         let addr = format!("0x{:x}", signer.address());
-
-        // Derive uncompressed public key hex
-        let pubkey_hex = uncompressed_pubkey_hex_from_privkey_hex(priv_key);
-        let pk = EthereumPublicKey::with_address(pubkey_hex, addr.clone());
 
         // Build SIWX message referencing the signer address
         let message = crate::SiwxMessage::new(
@@ -281,10 +234,12 @@ mod tests {
         let msg_to_sign = message.message_to_sign().unwrap();
         let sig = signer.sign_message(msg_to_sign.as_bytes()).await.unwrap();
         let sig_hex = format!("0x{}", hex::encode(sig.as_bytes()));
-        let signature = crate::Signature::eip191(sig_hex, addr.clone());
+        let signature = crate::Signature::eip191(sig_hex);
 
-        let verifier = VerifierFactory::ethereum();
-        let result = verifier.verify(&message, &signature, &pk).await.unwrap();
+        let verifier = SignatureVerifier::new(Chain::Ethereum).with_backend(Box::new(
+            EthereumSecp256k1Verifier::new(Some(test_provider_url())),
+        ));
+        let result = verifier.verify(&message, &signature).await.unwrap();
         assert!(result);
     }
 
@@ -293,11 +248,7 @@ mod tests {
         // Same key
         let priv_key = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
         let signer: PrivateKeySigner = priv_key.parse().unwrap();
-        let addr = format!("0x{:x}", signer.address());
-
-        // Derive uncompressed public key hex (unused for verification, but provided)
-        let pubkey_hex = uncompressed_pubkey_hex_from_privkey_hex(priv_key);
-        let pk = EthereumPublicKey::new(pubkey_hex);
+        let _addr = format!("0x{:x}", signer.address());
 
         // Intentionally use a mismatching address in the message vs signer
         let wrong_addr = "0x0000000000000000000000000000000000000001".to_string();
@@ -313,10 +264,12 @@ mod tests {
         let msg_to_sign = message.message_to_sign().unwrap();
         let sig = signer.sign_message(msg_to_sign.as_bytes()).await.unwrap();
         let sig_hex = format!("0x{}", hex::encode(sig.as_bytes()));
-        let signature = crate::Signature::eip191(sig_hex, addr.clone());
+        let signature = crate::Signature::eip191(sig_hex);
 
-        let verifier = VerifierFactory::ethereum();
-        let result = verifier.verify(&message, &signature, &pk).await.unwrap();
+        let verifier = SignatureVerifier::new(Chain::Ethereum).with_backend(Box::new(
+            EthereumSecp256k1Verifier::new(Some(test_provider_url())),
+        ));
+        let result = verifier.verify(&message, &signature).await.unwrap();
         assert!(!result);
     }
 
@@ -340,13 +293,12 @@ mod tests {
         let msg_to_sign = message.message_to_sign().unwrap();
         let sig = signer.sign_message(msg_to_sign.as_bytes()).await.unwrap();
         let sig_hex = format!("0x{}", hex::encode(sig.as_bytes()));
-        let signature = crate::Signature::eip191(sig_hex, addr.clone());
+        let signature = crate::Signature::eip191(sig_hex);
 
-        // Provide only an address as the "public key"
-        let pk = EthereumAddress::new(addr.clone()).unwrap();
-
-        let verifier = VerifierFactory::ethereum();
-        let result = verifier.verify(&message, &signature, &pk).await.unwrap();
+        let verifier = SignatureVerifier::new(Chain::Ethereum).with_backend(Box::new(
+            EthereumSecp256k1Verifier::new(Some(test_provider_url())),
+        ));
+        let result = verifier.verify(&message, &signature).await.unwrap();
         assert!(result);
     }
 
@@ -371,28 +323,21 @@ mod tests {
         let msg_to_sign = message.message_to_sign().unwrap();
         let sig = signer.sign_message(msg_to_sign.as_bytes()).await.unwrap();
         let sig_hex = format!("0x{}", hex::encode(sig.as_bytes()));
-        let signature = crate::Signature::eip191(sig_hex, addr.clone());
+        let signature = crate::Signature::eip191(sig_hex);
 
-        // Provide a mismatched uncompressed pubkey hex (65 bytes starting with 0x04)
-        // Here we just use an arbitrary value that validates as hex length but doesn't match signer
-        let bogus_pubkey = "0x04".to_string() + &"11".repeat(64);
-        let pk = EthereumPublicKey::new(bogus_pubkey);
-
-        let verifier = VerifierFactory::ethereum();
+        let verifier = SignatureVerifier::new(Chain::Ethereum).with_backend(Box::new(
+            EthereumSecp256k1Verifier::new(Some(test_provider_url())),
+        ));
         // Should still verify true because verification is address-based
-        let result = verifier.verify(&message, &signature, &pk).await.unwrap();
+        let result = verifier.verify(&message, &signature).await.unwrap();
         assert!(result);
     }
-
-    // Mainnet vectors for EIP-1271 using a default provider.
-    const DEFAULT_PROVIDER_URL: &str =
-        "https://mainnet.infura.io/v3/84842078b09946638c03157f83405213";
 
     fn test_provider_url() -> String {
         let _ = dotenvy::dotenv();
         env::var("ETHEREUM_RPC_URL")
             .or_else(|_| env::var("ETH_RPC_URL"))
-            .unwrap_or_else(|_| DEFAULT_PROVIDER_URL.to_string())
+            .expect("ETHEREUM_RPC_URL or ETH_RPC_URL must be set")
     }
 
     // Ignored network tests; run with: cargo test --features ethereum -- --ignored --test-threads=1
@@ -414,15 +359,11 @@ mod tests {
         .with_statement("SIWE Notepad Example");
         assert_eq!(message.message_to_sign().unwrap(), message_text);
 
-        let sig = crate::Signature::eip1271(signature_hex, contract_address);
-        let dummy_pubkey = EthereumPublicKey::new("0x04".to_string() + &"11".repeat(64));
+        let sig = crate::Signature::eip1271(signature_hex);
         let verifier = SignatureVerifier::new(Chain::Ethereum).with_backend(Box::new(
-            EthereumSecp256k1Verifier::with_rpc_url(test_provider_url()),
+            EthereumSecp256k1Verifier::new(Some(test_provider_url())),
         ));
-        let ok = verifier
-            .verify(&message, &sig, &dummy_pubkey)
-            .await
-            .unwrap();
+        let ok = verifier.verify(&message, &sig).await.unwrap();
         assert!(ok);
     }
 
@@ -444,15 +385,11 @@ mod tests {
         .with_statement("SIWE Notepad Example");
         assert_eq!(message.message_to_sign().unwrap(), message_text);
 
-        let sig = crate::Signature::eip1271(signature_hex, contract_address);
-        let dummy_pubkey = EthereumPublicKey::new("0x04".to_string() + &"11".repeat(64));
+        let sig = crate::Signature::eip1271(signature_hex);
         let verifier = SignatureVerifier::new(Chain::Ethereum).with_backend(Box::new(
-            EthereumSecp256k1Verifier::with_rpc_url(test_provider_url()),
+            EthereumSecp256k1Verifier::new(Some(test_provider_url())),
         ));
-        let ok = verifier
-            .verify(&message, &sig, &dummy_pubkey)
-            .await
-            .unwrap();
+        let ok = verifier.verify(&message, &sig).await.unwrap();
         assert!(ok);
     }
 }

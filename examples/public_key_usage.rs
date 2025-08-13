@@ -78,14 +78,12 @@ async fn main() -> SiwxResult<()> {
 
         let signature = Signature::eip191(
             "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-            "0x1234567890123456789012345678901234567890",
         );
-
-        let eth_public_key = PublicKeyFactory::ethereum(
-            "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
-        )?;
-        let verifier = VerifierFactory::ethereum();
-        let result = verifier.verify(&message, &signature, &eth_public_key).await;
+        let verifier = SignatureVerifier::new(Chain::Ethereum)
+            .with_backend(Box::new(siwx_rs::backend::ethereum::EthereumSecp256k1Verifier::new(
+                std::env::var("ETHEREUM_RPC_URL").ok(),
+            )));
+        let result = verifier.verify(&message, &signature).await;
         println!("   Verification result: {:?}", result);
         println!();
     }

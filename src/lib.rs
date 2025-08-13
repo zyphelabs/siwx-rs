@@ -31,7 +31,7 @@
 //!
 //! // Verify signature (implementation depends on your backend)
 //! // let verifier = SignatureVerifier::new(Chain::Ethereum);
-//! // let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+//! // let is_valid = verifier.verify(&message, &signature).await?;
 //! ```
 
 pub mod backend;
@@ -56,7 +56,7 @@ pub use public_key::{
     PublicKey, PublicKeyEnum, PublicKeyFactory, SolanaPublicKey as _SolanaPublicKeyMarker,
 };
 pub use signature::{Signature, SignatureType};
-pub use verifier::{SignatureVerifier, VerifierFactory};
+pub use verifier::SignatureVerifier;
 
 /// Re-export commonly used types
 pub mod prelude {
@@ -66,6 +66,6 @@ pub mod prelude {
     pub use super::SolanaPublicKey;
     pub use super::{
         Chain, PublicKey, PublicKeyEnum, PublicKeyFactory, Signature, SignatureType,
-        SignatureVerifier, SiwxError, SiwxMessage, SiwxResult, VerifierFactory,
+        SignatureVerifier, SiwxError, SiwxMessage, SiwxResult,
     };
 }

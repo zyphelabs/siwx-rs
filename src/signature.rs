@@ -1,5 +1,6 @@
 use crate::{Chain, SiwxError, SiwxResult};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 
 /// Signature types supported by the library
@@ -58,51 +59,55 @@ pub struct Signature {
     pub signature_type: SignatureType,
     /// The signature bytes (hex encoded for Ethereum, base58 for Solana)
     pub signature: String,
-    /// The public key or address that signed the message
-    pub signer: String,
-    /// Additional metadata for the signature
-    #[serde(default)]
-    pub metadata: std::collections::HashMap<String, String>,
+    /// Optional signer identity (e.g., authority pubkey on Solana, or account/contract on Ethereum)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
+    /// Optional metadata for chain-specific verification
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<HashMap<String, String>>,
 }
 
 impl Signature {
     /// Create a new signature
-    pub fn new(
-        signature_type: SignatureType,
-        signature: impl Into<String>,
-        signer: impl Into<String>,
-    ) -> Self {
+    pub fn new(signature_type: SignatureType, signature: impl Into<String>) -> Self {
         Self {
             signature_type,
             signature: signature.into(),
-            signer: signer.into(),
-            metadata: std::collections::HashMap::new(),
+            signer: None,
+            metadata: None,
         }
     }
 
     /// Create an EIP-191 signature
-    pub fn eip191(signature: impl Into<String>, signer: impl Into<String>) -> Self {
-        Self::new(SignatureType::Eip191, signature, signer)
+    pub fn eip191(signature: impl Into<String>) -> Self {
+        Self::new(SignatureType::Eip191, signature)
     }
 
     /// Create an EIP-1271 signature
-    pub fn eip1271(signature: impl Into<String>, signer: impl Into<String>) -> Self {
-        Self::new(SignatureType::Eip1271, signature, signer)
+    pub fn eip1271(signature: impl Into<String>) -> Self {
+        Self::new(SignatureType::Eip1271, signature)
     }
 
     /// Create an Ed25519 signature
-    pub fn ed25519(signature: impl Into<String>, signer: impl Into<String>) -> Self {
-        Self::new(SignatureType::Ed25519, signature, signer)
+    pub fn ed25519(signature: impl Into<String>) -> Self {
+        Self::new(SignatureType::Ed25519, signature)
     }
 
     /// Create an Ethereum auto-detect signature (chooses EIP-191 vs EIP-1271 at verify time)
-    pub fn ethereum_autodetect(signature: impl Into<String>, signer: impl Into<String>) -> Self {
-        Self::new(SignatureType::EthereumAutodetect, signature, signer)
+    pub fn ethereum_autodetect(signature: impl Into<String>) -> Self {
+        Self::new(SignatureType::EthereumAutodetect, signature)
     }
 
-    /// Add metadata to the signature
+    /// Optionally attach a signer identifier (e.g., Solana authority base58 or Ethereum address)
+    pub fn with_signer(mut self, signer: impl Into<String>) -> Self {
+        self.signer = Some(signer.into());
+        self
+    }
+
+    /// Optionally attach metadata entry (e.g., program_id, pda_seeds for Solana PDA verification)
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.metadata.insert(key.into(), value.into());
+        let map = self.metadata.get_or_insert_with(HashMap::new);
+        map.insert(key.into(), value.into());
         self
     }
 
@@ -274,11 +279,7 @@ impl Signature {
 
 impl fmt::Display for Signature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} signature by {}: {}",
-            self.signature_type, self.signer, self.signature
-        )
+        write!(f, "{} signature: {}", self.signature_type, self.signature)
     }
 }
 
@@ -290,11 +291,13 @@ mod tests {
     fn test_signature_creation() {
         let sig = Signature::eip191(
             "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-            "0x1234567890123456789012345678901234567890",
         );
 
         assert_eq!(sig.signature_type, SignatureType::Eip191);
-        assert_eq!(sig.signer, "0x1234567890123456789012345678901234567890");
+        assert_eq!(
+            sig.signature,
+            "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
+        );
     }
 
     #[test]
@@ -302,21 +305,18 @@ mod tests {
         // Valid signature
         let valid_sig = Signature::eip191(
             "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-            "0x1234567890123456789012345678901234567890",
         );
         assert!(valid_sig.validate_format().is_ok());
 
         // Invalid signature (wrong length)
         let invalid_sig = Signature::eip191(
             "0x123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789",
-            "0x1234567890123456789012345678901234567890",
         );
         assert!(invalid_sig.validate_format().is_err());
 
         // Invalid signature (no 0x prefix)
         let invalid_sig2 = Signature::eip191(
             "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-            "0x1234567890123456789012345678901234567890",
         );
         assert!(invalid_sig2.validate_format().is_err());
     }
@@ -343,22 +343,22 @@ mod tests {
     #[test]
     fn test_eip1271_signature_format_validation() {
         // Valid: 0x-prefixed, even-length hex
-        let sig = Signature::eip1271("0x1234abcdef", "0x1234567890123456789012345678901234567890");
+        let sig = Signature::eip1271("0x1234abcdef");
         assert!(sig.validate_format().is_ok());
 
         // Invalid: not 0x-prefixed
-        let sig = Signature::eip1271("1234abcdef", "0x1234567890123456789012345678901234567890");
+        let sig = Signature::eip1271("1234abcdef");
         assert!(sig.validate_format().is_err());
 
         // Invalid: odd-length hex
-        let sig = Signature::eip1271("0x123", "0x1234567890123456789012345678901234567890");
+        let sig = Signature::eip1271("0x123");
         assert!(sig.validate_format().is_err());
     }
 
     #[test]
     fn test_helpers_error_on_eip1271() {
         // EIP-1271 signatures can be arbitrary length hex; ensure helpers error clearly
-        let sig = Signature::eip1271("0xdeadbeef", "0x1234567890123456789012345678901234567890");
+        let sig = Signature::eip1271("0xdeadbeef");
         let err1 = sig.recovery_id().unwrap_err();
         let err2 = sig.r_s_components().unwrap_err();
         match err1 {

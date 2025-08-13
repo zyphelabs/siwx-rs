@@ -1,4 +1,4 @@
-use crate::{Chain, PublicKey, Signature, SignatureType, SiwxError, SiwxMessage, SiwxResult};
+use crate::{Chain, Signature, SignatureType, SiwxError, SiwxMessage, SiwxResult};
 use async_trait::async_trait;
 use std::fmt;
 
@@ -6,12 +6,7 @@ use std::fmt;
 #[async_trait]
 pub trait SignatureVerifierBackend: Send + Sync {
     /// Verify a signature for a given message
-    async fn verify(
-        &self,
-        message: &SiwxMessage,
-        signature: &Signature,
-        public_key: &dyn PublicKey,
-    ) -> SiwxResult<bool>;
+    async fn verify(&self, message: &SiwxMessage, signature: &Signature) -> SiwxResult<bool>;
 
     /// Get the chain this backend supports
     fn supported_chain(&self) -> Chain;
@@ -42,19 +37,10 @@ impl SignatureVerifier {
     }
 
     /// Verify a signature using available backends
-    pub async fn verify(
-        &self,
-        message: &SiwxMessage,
-        signature: &Signature,
-        public_key: &dyn PublicKey,
-    ) -> SiwxResult<bool> {
+    pub async fn verify(&self, message: &SiwxMessage, signature: &Signature) -> SiwxResult<bool> {
         // Validate message and signature first
         message.validate()?;
         signature.validate_format()?;
-        // Only validate the provided public key for signature types that require it
-        if matches!(signature.signature_type, SignatureType::Ed25519) {
-            public_key.validate()?;
-        }
 
         // Check if message has expired
         if message.is_expired()? {
@@ -68,15 +54,6 @@ impl SignatureVerifier {
             ));
         }
 
-        // Check if public key supports the signature type when the key is used for verification
-        if matches!(signature.signature_type, SignatureType::Ed25519)
-            && !public_key.supports_signature_type(&signature.signature_type)
-        {
-            return Err(SiwxError::VerificationFailed(
-                "Public key does not support the signature type".into(),
-            ));
-        }
-
         // Try each backend until one validates successfully
         let mut found_applicable_backend = false;
         for backend in &self.backends {
@@ -86,7 +63,7 @@ impl SignatureVerifier {
                     .contains(&signature.signature_type)
             {
                 found_applicable_backend = true;
-                match backend.verify(message, signature, public_key).await {
+                match backend.verify(message, signature).await {
                     Ok(true) => return Ok(true),
                     Ok(false) => {
                         // Try the next applicable backend
@@ -133,105 +110,62 @@ impl fmt::Debug for SignatureVerifier {
 
 // Ethereum backend moved to `backend::ethereum` under the `ethereum` feature.
 
-/// Factory for creating verifiers with default backends
-pub struct VerifierFactory;
-
-impl VerifierFactory {
-    /// Create a verifier for Ethereum with default backends
-    pub fn ethereum() -> SignatureVerifier {
-        #[cfg(feature = "ethereum")]
-        {
-            use crate::backend::ethereum::EthereumSecp256k1Verifier;
-            SignatureVerifier::new(Chain::Ethereum)
-                .with_backend(Box::new(EthereumSecp256k1Verifier::new()))
-        }
-        #[cfg(not(feature = "ethereum"))]
-        {
-            SignatureVerifier::new(Chain::Ethereum)
-        }
-    }
-
-    /// Create a verifier for Solana with default backends
-    pub fn solana() -> SignatureVerifier {
-        #[cfg(feature = "solana")]
-        {
-            use crate::backend::solana::SolanaEd25519Verifier;
-            SignatureVerifier::new(Chain::Solana).with_backend(Box::new(SolanaEd25519Verifier))
-        }
-        #[cfg(not(feature = "solana"))]
-        {
-            SignatureVerifier::new(Chain::Solana)
-        }
-    }
-
-    /// Create a verifier for any chain with default backends
-    pub fn for_chain(chain: Chain) -> SignatureVerifier {
-        match chain {
-            Chain::Ethereum | Chain::EthereumTestnet => {
-                #[cfg(feature = "ethereum")]
-                {
-                    use crate::backend::ethereum::EthereumSecp256k1Verifier;
-                    SignatureVerifier::new(chain)
-                        .with_backend(Box::new(EthereumSecp256k1Verifier::new()))
-                }
-                #[cfg(not(feature = "ethereum"))]
-                {
-                    SignatureVerifier::new(chain)
-                }
-            }
-            Chain::Solana | Chain::SolanaTestnet => {
-                // Keep parity with ethereum behavior: construct with requested chain
-                #[cfg(feature = "solana")]
-                {
-                    use crate::backend::solana::SolanaEd25519Verifier;
-                    SignatureVerifier::new(chain).with_backend(Box::new(SolanaEd25519Verifier))
-                }
-                #[cfg(not(feature = "solana"))]
-                {
-                    SignatureVerifier::new(chain)
-                }
-            }
-        }
-    }
-}
+// VerifierFactory removed; build verifiers manually.
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{PublicKeyFactory, SiwxMessage};
+    #[cfg(feature = "ethereum")]
+    use crate::backend::ethereum::EthereumSecp256k1Verifier;
+    #[cfg(feature = "solana")]
+    use crate::backend::solana::SolanaEd25519Verifier;
+    use crate::SiwxMessage;
 
     #[tokio::test]
     async fn test_verifier_creation() {
-        let verifier = VerifierFactory::ethereum();
-        assert_eq!(verifier.chain(), Chain::Ethereum);
+        // Ethereum
+        let verifier_eth = SignatureVerifier::new(Chain::Ethereum);
         #[cfg(feature = "ethereum")]
-        assert_eq!(verifier.backend_count(), 1);
+        let verifier_eth =
+            verifier_eth.with_backend(Box::new(EthereumSecp256k1Verifier::new(None)));
+        assert_eq!(verifier_eth.chain(), Chain::Ethereum);
+        #[cfg(feature = "ethereum")]
+        assert_eq!(verifier_eth.backend_count(), 1);
         #[cfg(not(feature = "ethereum"))]
-        assert_eq!(verifier.backend_count(), 0);
+        assert_eq!(verifier_eth.backend_count(), 0);
 
-        let verifier = VerifierFactory::solana();
-        assert_eq!(verifier.chain(), Chain::Solana);
+        // Solana
+        let verifier_sol = SignatureVerifier::new(Chain::Solana);
         #[cfg(feature = "solana")]
-        assert_eq!(verifier.backend_count(), 1);
+        let verifier_sol = verifier_sol.with_backend(Box::new(SolanaEd25519Verifier));
+        assert_eq!(verifier_sol.chain(), Chain::Solana);
+        #[cfg(feature = "solana")]
+        assert_eq!(verifier_sol.backend_count(), 1);
         #[cfg(not(feature = "solana"))]
-        assert_eq!(verifier.backend_count(), 0);
+        assert_eq!(verifier_sol.backend_count(), 0);
     }
 
     #[tokio::test]
     async fn test_verifier_for_chain() {
-        let verifier = VerifierFactory::for_chain(Chain::Ethereum);
-        assert_eq!(verifier.chain(), Chain::Ethereum);
+        // Ethereum
+        let verifier_eth = SignatureVerifier::new(Chain::Ethereum);
+        #[cfg(feature = "ethereum")]
+        let verifier_eth =
+            verifier_eth.with_backend(Box::new(EthereumSecp256k1Verifier::new(None)));
+        assert_eq!(verifier_eth.chain(), Chain::Ethereum);
 
-        let verifier = VerifierFactory::for_chain(Chain::Solana);
-        assert_eq!(verifier.chain(), Chain::Solana);
+        // Solana
+        let verifier_sol = SignatureVerifier::new(Chain::Solana);
+        #[cfg(feature = "solana")]
+        let verifier_sol = verifier_sol.with_backend(Box::new(SolanaEd25519Verifier));
+        assert_eq!(verifier_sol.chain(), Chain::Solana);
     }
 
     #[test]
     fn test_backend_support() {
         #[cfg(feature = "ethereum")]
         {
-            use crate::backend::ethereum::EthereumSecp256k1Verifier;
-            let eth_backend = EthereumSecp256k1Verifier::new();
+            let eth_backend = EthereumSecp256k1Verifier::new(None);
             assert_eq!(eth_backend.supported_chain(), Chain::Ethereum);
             assert!(eth_backend
                 .supported_signature_types()
@@ -249,9 +183,11 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "ethereum")]
     #[tokio::test]
     async fn test_verifier_with_public_key() {
-        let verifier = VerifierFactory::ethereum();
+        let verifier = SignatureVerifier::new(Chain::Ethereum)
+            .with_backend(Box::new(EthereumSecp256k1Verifier::new(None)));
         let message = SiwxMessage::new(
             "example.com",
             "0x1234567890123456789012345678901234567890",
@@ -261,17 +197,9 @@ mod tests {
             "nonce123",
         );
         let signature = Signature::eip191(
-            "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-            "0x1234567890123456789012345678901234567890",
+            "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",     
         );
-        // Provide either a public key or address; both should be accepted now
-        let public_key = PublicKeyFactory::for_chain(
-            "0x1234567890123456789012345678901234567890",
-            Chain::Ethereum,
-        )
-        .unwrap();
-
-        // This should not panic with the new public key abstraction
-        let _result = verifier.verify(&message, &signature, &public_key).await;
+        // This should not panic
+        let _result = verifier.verify(&message, &signature).await;
     }
 }

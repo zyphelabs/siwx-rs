@@ -67,7 +67,8 @@ async fn main() -> SiwxResult<()> {
     println!("Message to sign:\n{}", message_to_sign);
 
     // Create a verifier (requires the `ethereum` feature)
-    let verifier = VerifierFactory::ethereum();
+    let verifier = SignatureVerifier::new(Chain::Ethereum)
+        .with_backend(Box::new(EthereumSecp256k1Verifier::new(std::env::var("ETHEREUM_RPC_URL").ok())));
 
     // Verify a signature (example). For Ethereum EIP-191, provide the signer address.
     // You may pass either an Ethereum address (recommended) or an uncompressed
@@ -84,7 +85,7 @@ async fn main() -> SiwxResult<()> {
         "0x1234567890123456789012345678901234567890",
         Chain::Ethereum,
     )?;
-    let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+    let is_valid = verifier.verify(&message, &signature).await?;
     println!("Signature valid: {}", is_valid);
 
     Ok(())
@@ -116,7 +117,8 @@ let eth_message = SiwxMessage::new_with_chain(
 let message_to_sign = eth_message.message_to_sign()?;
 
 // Create verifier with default backend (supports EIP-191 and EIP-1271)
-let verifier = VerifierFactory::ethereum();
+let verifier = SignatureVerifier::new(Chain::Ethereum)
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(std::env::var("ETHEREUM_RPC_URL").ok())));
 // EIP-191 address-only flow: pass the address as the key
 let addr_key = PublicKeyFactory::for_chain(
     "0x1234567890123456789012345678901234567890",
@@ -146,7 +148,8 @@ let sol_message = SiwxMessage::new_with_chain(
 let message_to_sign = sol_message.message_to_sign()?;
 
 // Create verifier with default backend
-let verifier = VerifierFactory::solana();
+let verifier = SignatureVerifier::new(Chain::Solana)
+    .with_backend(Box::new(SolanaEd25519Verifier));
 ```
 
 ### Solana Smart Accounts (PDAs) and Squads Compatibility
@@ -192,8 +195,9 @@ let signature = Signature::ed25519(sig_b58, authority_pubkey_b58)
     .with_metadata("pda_seeds", pda_seeds_json);
 
 let public_key = PublicKeyFactory::solana(pda_address_b58);
-let verifier = VerifierFactory::solana();
-let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+let verifier = SignatureVerifier::new(Chain::Solana)
+    .with_backend(Box::new(SolanaEd25519Verifier));
+let is_valid = verifier.verify(&message, &signature).await?;
 ```
 
 Squads (SquadsX) vaults are PDAs. This flow is compatible with Squads as long as you use an authority key (e.g., a member key or relayer key) to sign off-chain and pass the correct `program_id` and `pda_seeds`. The verifier will confirm the PDA derivation and the authority signature.
@@ -249,8 +253,9 @@ let signature = Signature::ed25519(sig_b58, authority_pubkey_b58)
     .with_metadata("pda_seeds", pda_seeds_json);
 
 let public_key = PublicKeyFactory::solana(pda_address_b58);
-let verifier = VerifierFactory::solana();
-let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+let verifier = SignatureVerifier::new(Chain::Solana)
+    .with_backend(Box::new(SolanaEd25519Verifier));
+let is_valid = verifier.verify(&message, &signature).await?;
 ```
 
 ## Message Format
@@ -383,7 +388,8 @@ impl PublicKey for BitcoinPublicKey {
 
 ```rust
 // Create verifier with default backend (Ethereum supports EIP-191 and EIP-1271)
-let verifier = VerifierFactory::ethereum();
+let verifier = SignatureVerifier::new(Chain::Ethereum)
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(std::env::var("ETHEREUM_RPC_URL").ok())));
 
 // Verify signature (Ethereum supports passing an address or uncompressed secp256k1 pubkey)
 // Address-only recommended:
@@ -391,7 +397,7 @@ let public_key = PublicKeyFactory::for_chain(
     "0x1234567890123456789012345678901234567890",
     Chain::Ethereum,
 )?;
-let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+let is_valid = verifier.verify(&message, &signature).await?;
 ```
 
 ### EthereumAutodetect signature type
@@ -426,8 +432,9 @@ let key = PublicKeyFactory::for_chain(
     Chain::Ethereum,
 )?;
 
-let verifier = VerifierFactory::ethereum();
-let ok = verifier.verify(&message, &signature, &key).await?;
+let verifier = SignatureVerifier::new(Chain::Ethereum)
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(std::env::var("ETHEREUM_RPC_URL").ok())));
+let ok = verifier.verify(&message, &signature).await?;
 ```
 
 ### Ethereum Backend Configuration
@@ -542,8 +549,9 @@ let signature = Signature::eip1271(
 
 // You may pass an address as the key; it is not used by EIP-1271 verification
 let dummy_key = PublicKeyFactory::ethereum(contract_address)?;
-let verifier = VerifierFactory::ethereum();
-let ok = verifier.verify(&message, &signature, &dummy_key).await?;
+let verifier = SignatureVerifier::new(Chain::Ethereum)
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(std::env::var("ETHEREUM_RPC_URL").ok())));
+let ok = verifier.verify(&message, &signature).await?;
 ```
 
 ## Message Validation

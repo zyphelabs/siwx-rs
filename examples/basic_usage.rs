@@ -41,8 +41,12 @@ async fn main() -> SiwxResult<()> {
 
     // Example 3: Signature verification setup
     println!("3. Signature Verification Setup:");
-    let eth_verifier = VerifierFactory::ethereum();
-    let sol_verifier = VerifierFactory::solana();
+    let eth_verifier = SignatureVerifier::new(Chain::Ethereum)
+        .with_backend(Box::new(siwx_rs::backend::ethereum::EthereumSecp256k1Verifier::new(
+            std::env::var("ETHEREUM_RPC_URL").ok(),
+        )));
+    let sol_verifier = SignatureVerifier::new(Chain::Solana)
+        .with_backend(Box::new(siwx_rs::backend::solana::SolanaEd25519Verifier));
 
     println!("Ethereum verifier created with {} backends", eth_verifier.backend_count());
     println!("Solana verifier created with {} backends", sol_verifier.backend_count());
