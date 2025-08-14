@@ -392,8 +392,7 @@ impl fmt::Display for SiwxMessage {
         write!(
             f,
             "{}",
-            self.message_to_sign()
-                .unwrap_or_else(|_| { format!("Invalid SIWX message: {:?}", self) })
+            self.message_to_sign().unwrap_or_else(|err| err.to_string())
         )
     }
 }
