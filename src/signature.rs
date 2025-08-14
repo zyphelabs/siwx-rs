@@ -241,7 +241,7 @@ impl Signature {
                 "Recovery ID is not available for EIP-1271 signatures".into(),
             )),
             SignatureType::EthereumAutodetect => Err(SiwxError::InvalidSignature(
-                "Recovery ID only available for EIP-191 Ethereum signatures".into(),
+                "Recovery ID is not available for EthereumAutodetect signatures".into(),
             )),
             _ => Err(SiwxError::InvalidSignature(
                 "Recovery ID only available for EIP-191 Ethereum signatures".into(),
@@ -267,7 +267,7 @@ impl Signature {
                 "R and S components are not available for EIP-1271 signatures".into(),
             )),
             SignatureType::EthereumAutodetect => Err(SiwxError::InvalidSignature(
-                "R and S components only available for EIP-191 Ethereum signatures".into(),
+                "R and S components only available for EthereumAutodetect signatures".into(),
             )),
             _ => Err(SiwxError::InvalidSignature(
                 "R and S components only available for EIP-191 Ethereum signatures".into(),

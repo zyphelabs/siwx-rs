@@ -105,7 +105,6 @@ impl SolanaEd25519Verifier {
             .map_err(|e| SiwxError::InvalidPublicKey(format!("Invalid ed25519 public key: {e}")))
     }
 
-    #[allow(dead_code)]
     fn derive_pda(&self, program_id_str: &str, seeds_json: &str) -> SiwxResult<Pubkey> {
         let program_id = Pubkey::from_str(program_id_str)
             .map_err(|e| SiwxError::InvalidPublicKey(format!("Invalid program_id pubkey: {e}")))?;

@@ -121,6 +121,10 @@ mod tests {
     use crate::backend::solana::SolanaEd25519Verifier;
     use crate::SiwxMessage;
 
+    fn generate_hex_string(length: usize) -> String {
+        "0x".to_string() + &"00".repeat(length)
+    }
+
     #[tokio::test]
     async fn test_verifier_creation() {
         // Ethereum
@@ -196,9 +200,7 @@ mod tests {
             "2024-01-01T00:00:00Z",
             "nonce123",
         );
-        let signature = Signature::eip191(
-            "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",     
-        );
+        let signature = Signature::eip191(generate_hex_string(65));
         // This should not panic
         let _result = verifier.verify(&message, &signature).await;
     }
