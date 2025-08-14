@@ -32,11 +32,10 @@ pub trait PublicKey: Send + Sync + fmt::Debug + fmt::Display {
 
 /// Ethereum address wrapper implementing `PublicKey` for address-only flows
 #[cfg(feature = "ethereum")]
-#[typeshare::typeshare]
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EthereumAddress {
     /// The address (Alloy Address)
-    #[typeshare(skip)]
     pub address: Address,
 }
 
@@ -93,7 +92,7 @@ impl fmt::Display for EthereumAddress {
 
 /// Unified Ethereum key that can be either an address or a public key
 #[cfg(feature = "ethereum")]
-#[typeshare::typeshare]
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum EthereumKey {
@@ -179,7 +178,7 @@ impl fmt::Display for EthereumKey {
 
 /// Ethereum public key implementation
 #[cfg(feature = "ethereum")]
-#[typeshare::typeshare]
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EthereumPublicKey {
     /// The public key in hex format (with or without 0x prefix)
@@ -296,7 +295,7 @@ impl fmt::Display for EthereumPublicKey {
 
 /// Solana public key implementation
 #[cfg(feature = "solana")]
-#[typeshare::typeshare]
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SolanaPublicKey {
     /// The public key in base58 format
@@ -402,7 +401,7 @@ impl fmt::Display for SolanaPublicKey {
 }
 
 /// Enum wrapper for different public key types
-#[typeshare::typeshare]
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum PublicKeyEnum {

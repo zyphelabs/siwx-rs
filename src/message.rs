@@ -7,7 +7,7 @@ use std::fmt;
 use uuid::Uuid;
 
 /// SIWX message following EIP-4361 standard
-#[typeshare::typeshare]
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiwxMessage {
     /// The domain requesting the signing
@@ -21,7 +21,6 @@ pub struct SiwxMessage {
     /// The current version of the message
     pub version: String,
     /// The EIP-155 chain ID to which the session is bound
-    #[typeshare(serialized_as = "number")]
     pub chain_id: u64,
     /// A randomized token used to prevent replay attacks
     pub nonce: String,
@@ -36,7 +35,6 @@ pub struct SiwxMessage {
     /// A list of information or references to information the user wishes to have resolved
     pub resources: Option<Vec<String>>,
     /// Additional fields specific to the chain
-    #[typeshare(skip)]
     #[serde(flatten)]
     pub chain_specific: HashMap<String, String>,
 }
