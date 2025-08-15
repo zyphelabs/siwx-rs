@@ -16,7 +16,7 @@ A Rust library for implementing Sign-In with X (SIWX) authentication across mult
 
 ## Supported Chains
 
-- **Ethereum** (Mainnet & Testnets) [requires enabling the `ethereum` feature]
+- **Ethereum** (Mainnet & Testnets) [enabled by default; no action required]
   - EIP-191 personal_sign signatures
   - EIP-1271 smart contract signatures
   - secp256k1 cryptography
@@ -35,10 +35,10 @@ siwx-rs = { version = "0.1.0", features = ["full"] }
 
 ### Feature Flags
 
-- `default`: Core functionality only
-- `ethereum`: Ethereum-specific dependencies (Alloy meta crate)
+- `default`: Core + Ethereum (enabled by default)
+- `ethereum`: Ethereum-specific dependencies (Alloy meta crate). Enabled by default.
 - `solana`: Solana-specific dependencies (solana-sdk, bs58, ed25519-dalek)
-- `full`: All features enabled
+- `full`: All features enabled (Ethereum + Solana)
 
 ## Quick Start
 
@@ -66,7 +66,7 @@ async fn main() -> SiwxResult<()> {
     let message_to_sign = message.message_to_sign()?;
     println!("Message to sign:\n{}", message_to_sign);
 
-    // Create a verifier (requires the `ethereum` feature)
+    // Create a verifier (Ethereum is enabled by default)
     let verifier = SignatureVerifier::new(Chain::Ethereum)
         .with_backend(Box::new(EthereumSecp256k1Verifier::new(std::env::var("ETHEREUM_RPC_URL").ok())));
 
@@ -79,12 +79,8 @@ async fn main() -> SiwxResult<()> {
         "0x1234567890123456789012345678901234567890",
     );
 
-    // Pass the signer address as the key (address-only flow)
-    // Requires the `ethereum` feature; otherwise Ethereum constructors are unavailable
-    let public_key = PublicKeyFactory::for_chain(
-        "0x1234567890123456789012345678901234567890",
-        Chain::Ethereum,
-    )?;
+    // For Ethereum EIP-191, verification recovers the signer from the signature,
+    // so no `PublicKey` needs to be provided to the verifier in this example.
     let is_valid = verifier.verify(&message, &signature).await?;
     println!("Signature valid: {}", is_valid);
 
@@ -97,7 +93,7 @@ async fn main() -> SiwxResult<()> {
 ```rust
 use siwx_rs::prelude::*;
 
-// Requires `--features ethereum`
+// Ethereum is enabled by default (no feature flag required)
 // Create Ethereum SIWX message
 let eth_message = SiwxMessage::new_with_chain(
     "example.com",
@@ -303,7 +299,7 @@ The library provides a trait-based abstraction for public keys, making it easy t
 use siwx_rs::prelude::*;
 
 // Create Ethereum public key (uncompressed 65-byte secp256k1, 0x04 + 64 bytes)
-// Requires `--features ethereum`
+// Ethereum is enabled by default (no feature flag required)
 let eth_public_key = PublicKeyFactory::for_chain(
     "0x04<128-hex-chars-of-uncompressed-pubkey>",
     Chain::Ethereum,
@@ -494,25 +490,26 @@ let verifier = SignatureVerifier::new(Chain::Ethereum)
 
 ## Signer vs Public Key (why both?)
 
-- **`Signature.signer` (authority)**: who produced the signature. This may be an EOA address, a smart contract wallet address (EIP-1271), or on Solana an authority key.
-- **`public_key` argument (account)**: the account being authenticated, tied to `SiwxMessage.address` (e.g., Ethereum address or Solana account/PDA).
+- **`Signature.signer` (authority)**: who produced the signature. Attach it with `Signature::with_signer(...)`. On Ethereum this may be an EOA or smart contract wallet address (EIP-1271). On Solana this is the authority key.
+- **Account (from `SiwxMessage.address`)**: the account being authenticated. Set via `SiwxMessage.address` (e.g., Ethereum address or Solana account/PDA). This is not passed separately to `verify()`.
+
+You may use `PublicKeyFactory` in your application to parse/validate addresses or keys, but it is not passed to `verify()`.
 
 Backend behavior and checks:
 
 - **Ethereum EIP-191**
 
-  - Recover signer address from the signature and require it equals `message.address`.
-  - Also require `signature.signer == message.address` to avoid mismatches.
-  - The provided key can be an address or uncompressed secp256k1 public key; verification is address-based.
+  - Recover the signer address from the signature and require it equals `message.address`.
+  - If `signature.signer` is provided, it must also equal `message.address`.
 
 - **Ethereum EIP-1271**
 
   - `signature.signer` is the contract address and must equal `message.address`.
-  - Verifier calls `isValidSignature` on that contract; the `public_key` parameter is ignored.
+  - Verifier calls `isValidSignature` on that contract; no public key is provided to verification.
 
 - **Solana Ed25519 (EOA and PDA)**
-  - If `signature.signer == public_key.as_string()` (EOA), verify directly against that key.
-  - Otherwise treat as PDA flow: provide `program_id` and `pda_seeds` in `signature.metadata`. The verifier derives the PDA and requires it equals the account (`public_key`), then verifies signature with the authority in `signature.signer`.
+  - EOA flow: if `signature.signer` equals `message.address`, verify directly against that authority key.
+  - PDA flow: provide `program_id` and `pda_seeds` in `signature.metadata`. The verifier derives the PDA and requires it equals `message.address`, then verifies the signature with the authority in `signature.signer`.
 
 This separation enables EOAs and smart accounts while preventing cross-account replay and signer/account mismatches.
 
