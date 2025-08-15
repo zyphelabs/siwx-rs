@@ -119,11 +119,8 @@ mod tests {
     use crate::backend::ethereum::EthereumSecp256k1Verifier;
     #[cfg(feature = "solana")]
     use crate::backend::solana::SolanaEd25519Verifier;
+    use crate::utils::generate_mock_hex_string;
     use crate::SiwxMessage;
-
-    fn generate_hex_string(length: usize) -> String {
-        "0x".to_string() + &"00".repeat(length)
-    }
 
     #[tokio::test]
     async fn test_verifier_creation() {
@@ -200,7 +197,7 @@ mod tests {
             "2024-01-01T00:00:00Z",
             "nonce123",
         );
-        let signature = Signature::eip191(generate_hex_string(65));
+        let signature = Signature::eip191(generate_mock_hex_string(65, 0x00, true));
         // This should not panic
         let _result = verifier.verify(&message, &signature).await;
     }

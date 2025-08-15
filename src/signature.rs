@@ -285,38 +285,28 @@ impl fmt::Display for Signature {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::generate_mock_hex_string;
 
     #[test]
     fn test_signature_creation() {
-        let sig = Signature::eip191(
-            "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-        );
+        let sig = Signature::eip191(generate_mock_hex_string(65, 0x00, true));
 
         assert_eq!(sig.signature_type, SignatureType::Eip191);
-        assert_eq!(
-            sig.signature,
-            "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890"
-        );
+        assert_eq!(sig.signature, generate_mock_hex_string(65, 0x00, true));
     }
 
     #[test]
     fn test_ethereum_signature_validation() {
         // Valid signature
-        let valid_sig = Signature::eip191(
-            "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-        );
+        let valid_sig = Signature::eip191(generate_mock_hex_string(65, 0x00, true));
         assert!(valid_sig.validate_format().is_ok());
 
         // Invalid signature (wrong length)
-        let invalid_sig = Signature::eip191(
-            "0x123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789",
-        );
+        let invalid_sig = Signature::eip191(generate_mock_hex_string(66, 0x00, true));
         assert!(invalid_sig.validate_format().is_err());
 
         // Invalid signature (no 0x prefix)
-        let invalid_sig2 = Signature::eip191(
-            "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-        );
+        let invalid_sig2 = Signature::eip191(generate_mock_hex_string(65, 0x00, false));
         assert!(invalid_sig2.validate_format().is_err());
     }
 

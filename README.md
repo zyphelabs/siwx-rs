@@ -420,11 +420,9 @@ let message = SiwxMessage::new(
     "nonce123",
 );
 
-// Produce a signature off-chain, then wrap it with autodetect
 let signature = Signature::ethereum_autodetect(
-    "0x<hex-signature>",
-    "0x1234567890123456789012345678901234567890", // signer (EOA or contract)
-);
+    "0x<hex-signature>"
+).with_signer("0x1234567890123456789012345678901234567890"); // signer (EOA or contract)
 
 // Provide the account key (address is recommended for Ethereum)
 let key = PublicKeyFactory::for_chain(
@@ -444,8 +442,8 @@ let ok = verifier.verify(&message, &signature).await?;
     address from the signature and compares it to `message.address`/`signature.signer`.
   - EIP-1271 (smart contract validation) by calling `isValidSignature` via RPC.
 - RPC URL
-  - Defaults to a public Infura mainnet endpoint in `new()`.
-  - You can override it with `with_rpc_url(...)` when constructing the backend; there is no environment-variable fallback.
+  - Pass an optional RPC URL to `new(...)`. Use `Some(url)` to set a provider; use `None` if you don't need RPC (EIP-191 only).
+  - There is no built-in environment-variable fallback; you can pass `std::env::var("ETHEREUM_RPC_URL").ok()` yourself.
 
 Construct the verifier (feature `ethereum` must be enabled):
 
@@ -454,13 +452,13 @@ use siwx_rs::prelude::*;
 #[cfg(feature = "ethereum")]
 use siwx_rs::backend::ethereum::EthereumSecp256k1Verifier;
 
-// Default URL (public Infura mainnet) is used by `new()`
+// Pass None when you don't need RPC (EIP-191). EIP-1271 requires an RPC URL.
 let verifier = SignatureVerifier::new(Chain::Ethereum)
-    .with_backend(Box::new(EthereumSecp256k1Verifier::new()));
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(None)));
 
-// Or override with your own provider URL
+// Or provide your own provider URL
 let verifier_custom = SignatureVerifier::new(Chain::Ethereum)
-    .with_backend(Box::new(EthereumSecp256k1Verifier::with_rpc_url("https://mainnet.infura.io/v3/<KEY>")));
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(Some("https://mainnet.infura.io/v3/<KEY>".to_string()))));
 ```
 
 ### Custom Backend Implementation
@@ -476,7 +474,6 @@ impl SignatureVerifierBackend for CustomEthereumBackend {
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
         // Your custom verification logic here
         // You can use ethers-rs, alloy-rs, or any other library

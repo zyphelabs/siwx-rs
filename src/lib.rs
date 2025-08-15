@@ -40,6 +40,7 @@ pub mod error;
 pub mod message;
 pub mod public_key;
 pub mod signature;
+pub mod utils;
 pub mod verifier;
 
 pub use chain::Chain;
