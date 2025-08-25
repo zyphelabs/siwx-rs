@@ -31,77 +31,36 @@ pub trait PublicKey: Send + Sync + fmt::Debug + fmt::Display {
 }
 
 /// Ethereum address wrapper implementing `PublicKey` for address-only flows
+#[cfg(feature = "ethereum")]
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EthereumAddress {
-    /// The address (alloy Address when ethereum feature enabled; hex string otherwise)
-    #[cfg(feature = "ethereum")]
+    /// The address (Alloy Address)
     pub address: Address,
-    #[cfg(not(feature = "ethereum"))]
-    pub address: String,
 }
 
+#[cfg(feature = "ethereum")]
 impl EthereumAddress {
     pub fn new(address: impl Into<String>) -> SiwxResult<Self> {
         let addr = address.into();
-        #[cfg(feature = "ethereum")]
-        {
-            Address::from_str(addr.as_str())
-                .map(|parsed| Self { address: parsed })
-                .map_err(|e| SiwxError::InvalidAddress(format!("Invalid ethereum address: {e}")))
-        }
-        #[cfg(not(feature = "ethereum"))]
-        {
-            let normalized = if addr.starts_with("0x") {
-                addr
-            } else {
-                format!("0x{}", addr)
-            };
-            let hex_part = normalized.strip_prefix("0x").unwrap_or(&normalized);
-            if hex_part.len() != 40 {
-                return Err(SiwxError::InvalidAddress(format!(
-                    "Ethereum address must be 20 bytes (40 hex chars), got {}",
-                    hex_part.len()
-                )));
-            }
-            if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
-                return Err(SiwxError::InvalidAddress(
-                    "Ethereum address must be valid hex".into(),
-                ));
-            }
-            Ok(Self {
-                address: normalized,
-            })
-        }
+        Address::from_str(addr.as_str())
+            .map(|parsed| Self { address: parsed })
+            .map_err(|e| SiwxError::InvalidAddress(format!("Invalid ethereum address: {e}")))
     }
 }
 
+#[cfg(feature = "ethereum")]
 impl PublicKey for EthereumAddress {
     fn chain(&self) -> Chain {
         Chain::Ethereum
     }
 
     fn as_string(&self) -> String {
-        #[cfg(feature = "ethereum")]
-        {
-            format!("0x{:x}", self.address)
-        }
-        #[cfg(not(feature = "ethereum"))]
-        {
-            self.address.clone()
-        }
+        format!("0x{:x}", self.address)
     }
 
     fn as_bytes(&self) -> SiwxResult<Vec<u8>> {
-        #[cfg(feature = "ethereum")]
-        {
-            Ok(self.address.0.to_vec())
-        }
-        #[cfg(not(feature = "ethereum"))]
-        {
-            let hex_part = self.address.strip_prefix("0x").unwrap_or(&self.address);
-            hex::decode(hex_part)
-                .map_err(|e| SiwxError::InvalidPublicKey(format!("Invalid hex encoding: {}", e)))
-        }
+        Ok(self.address.0.to_vec())
     }
 
     fn validate(&self) -> SiwxResult<()> {
@@ -124,6 +83,7 @@ impl PublicKey for EthereumAddress {
     }
 }
 
+#[cfg(feature = "ethereum")]
 impl fmt::Display for EthereumAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_string())
@@ -131,12 +91,16 @@ impl fmt::Display for EthereumAddress {
 }
 
 /// Unified Ethereum key that can be either an address or a public key
+#[cfg(feature = "ethereum")]
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
 pub enum EthereumKey {
     Address(EthereumAddress),
     PublicKey(EthereumPublicKey),
 }
 
+#[cfg(feature = "ethereum")]
 impl EthereumKey {
     pub fn from_string(key: impl Into<String>) -> SiwxResult<Self> {
         let s = key.into();
@@ -153,6 +117,7 @@ impl EthereumKey {
     }
 }
 
+#[cfg(feature = "ethereum")]
 impl PublicKey for EthereumKey {
     fn chain(&self) -> Chain {
         Chain::Ethereum
@@ -201,6 +166,7 @@ impl PublicKey for EthereumKey {
     }
 }
 
+#[cfg(feature = "ethereum")]
 impl fmt::Display for EthereumKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -211,6 +177,8 @@ impl fmt::Display for EthereumKey {
 }
 
 /// Ethereum public key implementation
+#[cfg(feature = "ethereum")]
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EthereumPublicKey {
     /// The public key in hex format (with or without 0x prefix)
@@ -220,6 +188,7 @@ pub struct EthereumPublicKey {
     pub address: Option<String>,
 }
 
+#[cfg(feature = "ethereum")]
 impl EthereumPublicKey {
     /// Create a new Ethereum public key from hex string
     pub fn new(key: impl Into<String>) -> Self {
@@ -260,21 +229,13 @@ impl EthereumPublicKey {
                 "Ethereum public key must be 65 bytes uncompressed (0x04 + 64 bytes)".into(),
             ));
         }
-        #[cfg(feature = "ethereum")]
-        {
-            let hash = keccak256(&bytes[1..]);
-            let addr = Address::from_slice(&hash[12..]);
-            Ok(format!("0x{:x}", addr))
-        }
-        #[cfg(not(feature = "ethereum"))]
-        {
-            Err(SiwxError::InvalidPublicKey(
-                "Ethereum feature not enabled for address derivation".into(),
-            ))
-        }
+        let hash = keccak256(&bytes[1..]);
+        let addr = Address::from_slice(&hash[12..]);
+        Ok(format!("0x{:x}", addr))
     }
 }
 
+#[cfg(feature = "ethereum")]
 impl PublicKey for EthereumPublicKey {
     fn chain(&self) -> Chain {
         Chain::Ethereum
@@ -325,6 +286,7 @@ impl PublicKey for EthereumPublicKey {
     }
 }
 
+#[cfg(feature = "ethereum")]
 impl fmt::Display for EthereumPublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.key)
@@ -332,6 +294,8 @@ impl fmt::Display for EthereumPublicKey {
 }
 
 /// Solana public key implementation
+#[cfg(feature = "solana")]
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SolanaPublicKey {
     /// The public key in base58 format
@@ -341,6 +305,7 @@ pub struct SolanaPublicKey {
     pub address: Option<String>,
 }
 
+#[cfg(feature = "solana")]
 impl SolanaPublicKey {
     /// Create a new Solana public key from base58 string
     pub fn new(key: impl Into<String>) -> Self {
@@ -360,6 +325,7 @@ impl SolanaPublicKey {
     }
 }
 
+#[cfg(feature = "solana")]
 impl PublicKey for SolanaPublicKey {
     fn chain(&self) -> Chain {
         Chain::Solana
@@ -427,6 +393,7 @@ impl PublicKey for SolanaPublicKey {
     }
 }
 
+#[cfg(feature = "solana")]
 impl fmt::Display for SolanaPublicKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.key)
@@ -434,22 +401,27 @@ impl fmt::Display for SolanaPublicKey {
 }
 
 /// Enum wrapper for different public key types
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum PublicKeyEnum {
     /// Ethereum key (address or uncompressed public key)
+    #[cfg(feature = "ethereum")]
     Ethereum(EthereumKey),
     /// Solana public key
+    #[cfg(feature = "solana")]
     Solana(SolanaPublicKey),
 }
 
 impl PublicKeyEnum {
     /// Create an Ethereum public key
+    #[cfg(feature = "ethereum")]
     pub fn ethereum(key: impl Into<String>) -> SiwxResult<Self> {
         Ok(Self::Ethereum(EthereumKey::from_string(key)?))
     }
 
     /// Create a Solana public key
+    #[cfg(feature = "solana")]
     pub fn solana(key: impl Into<String>) -> Self {
         Self::Solana(SolanaPublicKey::new(key))
     }
@@ -457,28 +429,55 @@ impl PublicKeyEnum {
     /// Create a public key from string based on chain
     pub fn from_string(key: impl Into<String>, chain: Chain) -> SiwxResult<Self> {
         match chain {
-            Chain::Ethereum | Chain::EthereumTestnet => Self::ethereum(key),
-            Chain::Solana | Chain::SolanaTestnet => Ok(Self::solana(key)),
+            Chain::Ethereum | Chain::EthereumTestnet => {
+                #[cfg(feature = "ethereum")]
+                {
+                    Self::ethereum(key)
+                }
+                #[cfg(not(feature = "ethereum"))]
+                {
+                    Err(SiwxError::InvalidPublicKey(
+                        "Ethereum feature not enabled".into(),
+                    ))
+                }
+            }
+            Chain::Solana | Chain::SolanaTestnet => {
+                #[cfg(feature = "solana")]
+                {
+                    Ok(Self::solana(key))
+                }
+                #[cfg(not(feature = "solana"))]
+                {
+                    Err(SiwxError::InvalidPublicKey(
+                        "Solana feature not enabled".into(),
+                    ))
+                }
+            }
         }
     }
 
     /// Try to detect the chain from the key format
     pub fn detect_chain(key: &str) -> Option<Chain> {
-        if key.starts_with("0x") && (key.len() == 132 || key.len() == 42) {
-            Some(Chain::Ethereum)
-        } else if key
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() && !matches!(c, '0' | 'O' | 'I' | 'l'))
+        if cfg!(feature = "ethereum")
+            && key.starts_with("0x")
+            && (key.len() == 132 || key.len() == 42)
+        {
+            return Some(Chain::Ethereum);
+        }
+        if cfg!(feature = "solana")
+            && key
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() && !matches!(c, '0' | 'O' | 'I' | 'l'))
             && key.len() >= 32
             && key.len() <= 44
         {
-            Some(Chain::Solana)
-        } else {
-            None
+            return Some(Chain::Solana);
         }
+        None
     }
 }
 
+#[cfg(all(feature = "ethereum", feature = "solana"))]
 impl PublicKey for PublicKeyEnum {
     fn chain(&self) -> Chain {
         match self {
@@ -530,6 +529,52 @@ impl PublicKey for PublicKeyEnum {
     }
 }
 
+#[cfg(all(not(feature = "ethereum"), feature = "solana"))]
+impl PublicKey for PublicKeyEnum {
+    fn chain(&self) -> Chain {
+        match self {
+            PublicKeyEnum::Solana(_) => Chain::Solana,
+        }
+    }
+
+    fn as_string(&self) -> String {
+        match self {
+            PublicKeyEnum::Solana(pk) => pk.as_string(),
+        }
+    }
+
+    fn as_bytes(&self) -> SiwxResult<Vec<u8>> {
+        match self {
+            PublicKeyEnum::Solana(pk) => pk.as_bytes(),
+        }
+    }
+
+    fn validate(&self) -> SiwxResult<()> {
+        match self {
+            PublicKeyEnum::Solana(pk) => pk.validate(),
+        }
+    }
+
+    fn address(&self) -> SiwxResult<String> {
+        match self {
+            PublicKeyEnum::Solana(pk) => pk.address(),
+        }
+    }
+
+    fn supports_signature_type(&self, signature_type: &crate::SignatureType) -> bool {
+        match self {
+            PublicKeyEnum::Solana(pk) => pk.supports_signature_type(signature_type),
+        }
+    }
+
+    fn key_type(&self) -> &'static str {
+        match self {
+            PublicKeyEnum::Solana(pk) => pk.key_type(),
+        }
+    }
+}
+
+#[cfg(all(feature = "ethereum", feature = "solana"))]
 impl fmt::Display for PublicKeyEnum {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -539,12 +584,76 @@ impl fmt::Display for PublicKeyEnum {
     }
 }
 
+#[cfg(all(feature = "ethereum", not(feature = "solana")))]
+impl PublicKey for PublicKeyEnum {
+    fn chain(&self) -> Chain {
+        match self {
+            PublicKeyEnum::Ethereum(_) => Chain::Ethereum,
+        }
+    }
+
+    fn as_string(&self) -> String {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.as_string(),
+        }
+    }
+
+    fn as_bytes(&self) -> SiwxResult<Vec<u8>> {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.as_bytes(),
+        }
+    }
+
+    fn validate(&self) -> SiwxResult<()> {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.validate(),
+        }
+    }
+
+    fn address(&self) -> SiwxResult<String> {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.address(),
+        }
+    }
+
+    fn supports_signature_type(&self, signature_type: &crate::SignatureType) -> bool {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.supports_signature_type(signature_type),
+        }
+    }
+
+    fn key_type(&self) -> &'static str {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => pk.key_type(),
+        }
+    }
+}
+
+#[cfg(all(feature = "ethereum", not(feature = "solana")))]
+impl fmt::Display for PublicKeyEnum {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PublicKeyEnum::Ethereum(pk) => write!(f, "{}", pk),
+        }
+    }
+}
+#[cfg(all(not(feature = "ethereum"), feature = "solana"))]
+impl fmt::Display for PublicKeyEnum {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            PublicKeyEnum::Solana(pk) => write!(f, "{}", pk),
+        }
+    }
+}
+
+#[cfg(feature = "ethereum")]
 impl From<EthereumKey> for PublicKeyEnum {
     fn from(pk: EthereumKey) -> Self {
         Self::Ethereum(pk)
     }
 }
 
+#[cfg(feature = "solana")]
 impl From<SolanaPublicKey> for PublicKeyEnum {
     fn from(pk: SolanaPublicKey) -> Self {
         Self::Solana(pk)
@@ -556,11 +665,13 @@ pub struct PublicKeyFactory;
 
 impl PublicKeyFactory {
     /// Create a public key for Ethereum
+    #[cfg(feature = "ethereum")]
     pub fn ethereum(key: impl Into<String>) -> SiwxResult<PublicKeyEnum> {
         PublicKeyEnum::ethereum(key)
     }
 
     /// Create a public key for Solana
+    #[cfg(feature = "solana")]
     pub fn solana(key: impl Into<String>) -> PublicKeyEnum {
         PublicKeyEnum::solana(key)
     }
@@ -584,8 +695,15 @@ impl PublicKeyFactory {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    #[cfg(all(feature = "ethereum", feature = "solana"))]
+    use super::{Chain, EthereumAddress, EthereumPublicKey, SolanaPublicKey};
+    #[cfg(all(feature = "ethereum", not(feature = "solana")))]
+    use super::{Chain, EthereumPublicKey};
+    #[cfg(all(not(feature = "ethereum"), feature = "solana"))]
+    use super::{Chain, SolanaPublicKey};
+    use super::{PublicKey, PublicKeyEnum, PublicKeyFactory};
 
+    #[cfg(feature = "ethereum")]
     #[test]
     fn test_ethereum_public_key_creation() {
         let pk = EthereumPublicKey::new("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");
@@ -594,6 +712,7 @@ mod tests {
         assert!(pk.validate().is_ok());
     }
 
+    #[cfg(feature = "solana")]
     #[test]
     fn test_solana_public_key_creation() {
         let pk = SolanaPublicKey::new("11111111111111111111111111111112");
@@ -602,6 +721,7 @@ mod tests {
         assert!(pk.validate().is_ok());
     }
 
+    #[cfg(all(feature = "ethereum", feature = "solana"))]
     #[test]
     fn test_public_key_enum() {
         let eth_pk = PublicKeyEnum::ethereum("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890").unwrap();
@@ -611,6 +731,7 @@ mod tests {
         assert_eq!(sol_pk.chain(), Chain::Solana);
     }
 
+    #[cfg(all(feature = "ethereum", feature = "solana"))]
     #[test]
     fn test_chain_detection() {
         assert_eq!(
@@ -628,6 +749,17 @@ mod tests {
         assert_eq!(PublicKeyEnum::detect_chain("invalid"), None);
     }
 
+    #[cfg(all(not(feature = "ethereum"), feature = "solana"))]
+    #[test]
+    fn test_chain_detection_solana_only() {
+        assert_eq!(
+            PublicKeyEnum::detect_chain("11111111111111111111111111111112"),
+            Some(Chain::Solana)
+        );
+        assert_eq!(PublicKeyEnum::detect_chain("invalid"), None);
+    }
+
+    #[cfg(all(feature = "ethereum", feature = "solana"))]
     #[test]
     fn test_factory() {
         let pk = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890").unwrap();
@@ -637,6 +769,7 @@ mod tests {
         assert_eq!(pk.chain(), Chain::Solana);
     }
 
+    #[cfg(all(feature = "ethereum", feature = "solana"))]
     #[test]
     fn test_signature_type_support() {
         let eth_pk = EthereumPublicKey::new("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890");

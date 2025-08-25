@@ -16,11 +16,11 @@ A Rust library for implementing Sign-In with X (SIWX) authentication across mult
 
 ## Supported Chains
 
-- **Ethereum** (Mainnet & Testnets)
+- **Ethereum** (Mainnet & Testnets) [enabled by default; no action required]
   - EIP-191 personal_sign signatures
   - EIP-1271 smart contract signatures
   - secp256k1 cryptography
-- **Solana** (Mainnet & Testnets)
+- **Solana** (Mainnet & Testnets) [requires enabling the `solana` feature]
   - Ed25519 signatures
   - Base58 encoding
 
@@ -35,10 +35,10 @@ siwx-rs = { version = "0.1.0", features = ["full"] }
 
 ### Feature Flags
 
-- `default`: Core functionality only
-- `ethereum`: Ethereum-specific dependencies (Alloy meta crate)
+- `default`: Core + Ethereum (enabled by default)
+- `ethereum`: Ethereum-specific dependencies (Alloy meta crate). Enabled by default.
 - `solana`: Solana-specific dependencies (solana-sdk, bs58, ed25519-dalek)
-- `full`: All features enabled
+- `full`: All features enabled (Ethereum + Solana)
 
 ## Quick Start
 
@@ -66,8 +66,9 @@ async fn main() -> SiwxResult<()> {
     let message_to_sign = message.message_to_sign()?;
     println!("Message to sign:\n{}", message_to_sign);
 
-    // Create a verifier
-    let verifier = VerifierFactory::ethereum();
+    // Create a verifier (Ethereum is enabled by default)
+    let verifier = SignatureVerifier::new(Chain::Ethereum)
+        .with_backend(Box::new(EthereumSecp256k1Verifier::new(std::env::var("ETHEREUM_RPC_URL").ok())));
 
     // Verify a signature (example). For Ethereum EIP-191, provide the signer address.
     // You may pass either an Ethereum address (recommended) or an uncompressed
@@ -78,11 +79,9 @@ async fn main() -> SiwxResult<()> {
         "0x1234567890123456789012345678901234567890",
     );
 
-    // Pass the signer address as the key (address-only flow)
-    let public_key = PublicKeyFactory::ethereum(
-        "0x1234567890123456789012345678901234567890"
-    )?;
-    let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+    // For Ethereum EIP-191, verification recovers the signer from the signature,
+    // so no `PublicKey` needs to be provided to the verifier in this example.
+    let is_valid = verifier.verify(&message, &signature).await?;
     println!("Signature valid: {}", is_valid);
 
     Ok(())
@@ -94,6 +93,7 @@ async fn main() -> SiwxResult<()> {
 ```rust
 use siwx_rs::prelude::*;
 
+// Ethereum is enabled by default (no feature flag required)
 // Create Ethereum SIWX message
 let eth_message = SiwxMessage::new_with_chain(
     "example.com",
@@ -113,10 +113,12 @@ let eth_message = SiwxMessage::new_with_chain(
 let message_to_sign = eth_message.message_to_sign()?;
 
 // Create verifier with default backend (supports EIP-191 and EIP-1271)
-let verifier = VerifierFactory::ethereum();
+let verifier = SignatureVerifier::new(Chain::Ethereum)
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(std::env::var("ETHEREUM_RPC_URL").ok())));
 // EIP-191 address-only flow: pass the address as the key
-let addr_key = PublicKeyFactory::ethereum(
-    "0x1234567890123456789012345678901234567890"
+let addr_key = PublicKeyFactory::for_chain(
+    "0x1234567890123456789012345678901234567890",
+    Chain::Ethereum,
 )?;
 ```
 
@@ -125,6 +127,7 @@ let addr_key = PublicKeyFactory::ethereum(
 ```rust
 use siwx_rs::prelude::*;
 
+// Requires `--features solana`
 // Create Solana SIWX message
 let sol_message = SiwxMessage::new_with_chain(
     "example.com",
@@ -141,7 +144,8 @@ let sol_message = SiwxMessage::new_with_chain(
 let message_to_sign = sol_message.message_to_sign()?;
 
 // Create verifier with default backend
-let verifier = VerifierFactory::solana();
+let verifier = SignatureVerifier::new(Chain::Solana)
+    .with_backend(Box::new(SolanaEd25519Verifier));
 ```
 
 ### Solana Smart Accounts (PDAs) and Squads Compatibility
@@ -161,6 +165,7 @@ Example using an authority key for a PDA:
 ```rust
 use siwx_rs::prelude::*;
 
+// Requires `--features solana`
 // Assume you already know the PDA and its program id/seeds used to derive it
 let program_id_b58 = "<PROGRAM_ID_BASE58>";
 let pda_address_b58 = "<PDA_ADDRESS_BASE58>";
@@ -186,8 +191,9 @@ let signature = Signature::ed25519(sig_b58, authority_pubkey_b58)
     .with_metadata("pda_seeds", pda_seeds_json);
 
 let public_key = PublicKeyFactory::solana(pda_address_b58);
-let verifier = VerifierFactory::solana();
-let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+let verifier = SignatureVerifier::new(Chain::Solana)
+    .with_backend(Box::new(SolanaEd25519Verifier));
+let is_valid = verifier.verify(&message, &signature).await?;
 ```
 
 Squads (SquadsX) vaults are PDAs. This flow is compatible with Squads as long as you use an authority key (e.g., a member key or relayer key) to sign off-chain and pass the correct `program_id` and `pda_seeds`. The verifier will confirm the PDA derivation and the authority signature.
@@ -243,8 +249,9 @@ let signature = Signature::ed25519(sig_b58, authority_pubkey_b58)
     .with_metadata("pda_seeds", pda_seeds_json);
 
 let public_key = PublicKeyFactory::solana(pda_address_b58);
-let verifier = VerifierFactory::solana();
-let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+let verifier = SignatureVerifier::new(Chain::Solana)
+    .with_backend(Box::new(SolanaEd25519Verifier));
+let is_valid = verifier.verify(&message, &signature).await?;
 ```
 
 ## Message Format
@@ -292,12 +299,16 @@ The library provides a trait-based abstraction for public keys, making it easy t
 use siwx_rs::prelude::*;
 
 // Create Ethereum public key (uncompressed 65-byte secp256k1, 0x04 + 64 bytes)
-let eth_public_key = PublicKeyFactory::ethereum("0x04<128-hex-chars-of-uncompressed-pubkey>");
+// Ethereum is enabled by default (no feature flag required)
+let eth_public_key = PublicKeyFactory::for_chain(
+    "0x04<128-hex-chars-of-uncompressed-pubkey>",
+    Chain::Ethereum,
+);
 
 // Create Solana public key
 let sol_public_key = PublicKeyFactory::solana("11111111111111111111111111111112");
 
-// Auto-detect public key type
+// Auto-detect public key type (requires the relevant feature for detected chain)
 let auto_detected = PublicKeyFactory::auto_detect("0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890")?;
 
 // Chain-specific creation
@@ -318,9 +329,8 @@ if eth_public_key.supports_signature_type(&SignatureType::Eip191) {
     println!("Supports EIP-191 signatures");
 }
 
-// Get address from public key (requires that the key was constructed with a known address,
-// or a future version of this library adds on-the-fly derivation)
-let address = eth_public_key.address()?; // may error if address derivation is not available
+// Get address from public key
+let address = eth_public_key.address()?;
 ```
 
 ### Extending for New Chains
@@ -374,12 +384,51 @@ impl PublicKey for BitcoinPublicKey {
 
 ```rust
 // Create verifier with default backend (Ethereum supports EIP-191 and EIP-1271)
-let verifier = VerifierFactory::ethereum();
+let verifier = SignatureVerifier::new(Chain::Ethereum)
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(std::env::var("ETHEREUM_RPC_URL").ok())));
 
 // Verify signature (Ethereum supports passing an address or uncompressed secp256k1 pubkey)
 // Address-only recommended:
-let public_key = PublicKeyFactory::ethereum("0x1234567890123456789012345678901234567890")?;
-let is_valid = verifier.verify(&message, &signature, &public_key).await?;
+let public_key = PublicKeyFactory::for_chain(
+    "0x1234567890123456789012345678901234567890",
+    Chain::Ethereum,
+)?;
+let is_valid = verifier.verify(&message, &signature).await?;
+```
+
+### EthereumAutodetect signature type
+
+When you don't know upfront whether the signer is an EOA (EIP-191) or a smart contract wallet (EIP-1271), use `EthereumAutodetect`. The verifier will:
+
+- Route to EIP-191 if `signature.signer` equals `SiwxMessage.address` (case-insensitive)
+- Otherwise, route to EIP-1271 and call `isValidSignature` on `signature.signer`
+
+```rust
+use siwx_rs::prelude::*;
+
+// Build a standard SIWX message
+let message = SiwxMessage::new(
+    "example.com",
+    "0x1234567890123456789012345678901234567890",
+    "https://example.com/login",
+    "1",
+    "2024-01-01T00:00:00Z",
+    "nonce123",
+);
+
+let signature = Signature::ethereum_autodetect(
+    "0x<hex-signature>"
+).with_signer("0x1234567890123456789012345678901234567890"); // signer (EOA or contract)
+
+// Provide the account key (address is recommended for Ethereum)
+let key = PublicKeyFactory::for_chain(
+    "0x1234567890123456789012345678901234567890",
+    Chain::Ethereum,
+)?;
+
+let verifier = SignatureVerifier::new(Chain::Ethereum)
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(std::env::var("ETHEREUM_RPC_URL").ok())));
+let ok = verifier.verify(&message, &signature).await?;
 ```
 
 ### Ethereum Backend Configuration
@@ -388,27 +437,24 @@ let is_valid = verifier.verify(&message, &signature, &public_key).await?;
   - EIP-191 (personal_sign) with 65-byte signatures (r|s|v). The verifier recovers the signer
     address from the signature and compares it to `message.address`/`signature.signer`.
   - EIP-1271 (smart contract validation) by calling `isValidSignature` via RPC.
-- RPC URL resolution order for EIP-1271:
-  - Explicit URL if you build the backend with one
-  - `ETHEREUM_RPC_URL` env var
-  - `ETH_RPC_URL` env var
-  - Fallback: a public Infura mainnet endpoint
+- RPC URL
+  - Pass an optional RPC URL to `new(...)`. Use `Some(url)` to set a provider; use `None` if you don't need RPC (EIP-191 only).
+  - There is no built-in environment-variable fallback; you can pass `std::env::var("ETHEREUM_RPC_URL").ok()` yourself.
 
-To set an explicit RPC URL, construct the verifier with the backend manually (feature `ethereum` must be enabled):
+Construct the verifier (feature `ethereum` must be enabled):
 
 ```rust
 use siwx_rs::prelude::*;
 #[cfg(feature = "ethereum")]
 use siwx_rs::backend::ethereum::EthereumSecp256k1Verifier;
 
+// Pass None when you don't need RPC (EIP-191). EIP-1271 requires an RPC URL.
 let verifier = SignatureVerifier::new(Chain::Ethereum)
-    .with_backend(Box::new(EthereumSecp256k1Verifier::with_rpc_url("https://mainnet.infura.io/v3/<KEY>")));
-```
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(None)));
 
-Or set an environment variable (no code changes needed):
-
-```bash
-export ETHEREUM_RPC_URL="https://mainnet.infura.io/v3/<KEY>"
+// Or provide your own provider URL
+let verifier_custom = SignatureVerifier::new(Chain::Ethereum)
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(Some("https://mainnet.infura.io/v3/<KEY>".to_string()))));
 ```
 
 ### Custom Backend Implementation
@@ -424,7 +470,6 @@ impl SignatureVerifierBackend for CustomEthereumBackend {
         &self,
         message: &SiwxMessage,
         signature: &Signature,
-        public_key: &dyn PublicKey,
     ) -> SiwxResult<bool> {
         // Your custom verification logic here
         // You can use ethers-rs, alloy-rs, or any other library
@@ -442,6 +487,31 @@ impl SignatureVerifierBackend for CustomEthereumBackend {
 let verifier = SignatureVerifier::new(Chain::Ethereum)
     .with_backend(Box::new(CustomEthereumBackend));
 ```
+
+## Signer vs Public Key (why both?)
+
+- **`Signature.signer` (authority)**: who produced the signature. Attach it with `Signature::with_signer(...)`. On Ethereum this may be an EOA or smart contract wallet address (EIP-1271). On Solana this is the authority key.
+- **Account (from `SiwxMessage.address`)**: the account being authenticated. Set via `SiwxMessage.address` (e.g., Ethereum address or Solana account/PDA). This is not passed separately to `verify()`.
+
+You may use `PublicKeyFactory` in your application to parse/validate addresses or keys, but it is not passed to `verify()`.
+
+Backend behavior and checks:
+
+- **Ethereum EIP-191**
+
+  - Recover the signer address from the signature and require it equals `message.address`.
+  - If `signature.signer` is provided, it must also equal `message.address`.
+
+- **Ethereum EIP-1271**
+
+  - `signature.signer` is the contract address and must equal `message.address`.
+  - Verifier calls `isValidSignature` on that contract; no public key is provided to verification.
+
+- **Solana Ed25519 (EOA and PDA)**
+  - EOA flow: if `signature.signer` equals `message.address`, verify directly against that authority key.
+  - PDA flow: provide `program_id` and `pda_seeds` in `signature.metadata`. The verifier derives the PDA and requires it equals `message.address`, then verifies the signature with the authority in `signature.signer`.
+
+This separation enables EOAs and smart accounts while preventing cross-account replay and signer/account mismatches.
 
 ## Smart Contract Wallet Support (EIP-1271)
 
@@ -473,8 +543,9 @@ let signature = Signature::eip1271(
 
 // You may pass an address as the key; it is not used by EIP-1271 verification
 let dummy_key = PublicKeyFactory::ethereum(contract_address)?;
-let verifier = VerifierFactory::ethereum();
-let ok = verifier.verify(&message, &signature, &dummy_key).await?;
+let verifier = SignatureVerifier::new(Chain::Ethereum)
+    .with_backend(Box::new(EthereumSecp256k1Verifier::new(std::env::var("ETHEREUM_RPC_URL").ok())));
+let ok = verifier.verify(&message, &signature).await?;
 ```
 
 ## Message Validation

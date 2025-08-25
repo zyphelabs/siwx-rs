@@ -1,14 +1,19 @@
 use crate::{Chain, SiwxError, SiwxResult};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
 
 /// Signature types supported by the library
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
 pub enum SignatureType {
     /// EIP-191 personal_sign (Ethereum)
     Eip191,
     /// EIP-1271 smart contract signature (Ethereum)
     Eip1271,
+    /// Ethereum auto-detect: route to EIP-191 if signer matches message address, otherwise EIP-1271
+    EthereumAutodetect,
     /// Ed25519 signature (Solana)
     Ed25519,
     /// Custom signature type
@@ -26,7 +31,10 @@ impl SignatureType {
 
     /// Check if this signature type supports smart contract wallets
     pub fn supports_smart_contracts(&self) -> bool {
-        matches!(self, SignatureType::Eip1271)
+        matches!(
+            self,
+            SignatureType::Eip1271 | SignatureType::EthereumAutodetect
+        )
     }
 }
 
@@ -35,6 +43,7 @@ impl fmt::Display for SignatureType {
         match self {
             SignatureType::Eip191 => write!(f, "EIP-191"),
             SignatureType::Eip1271 => write!(f, "EIP-1271"),
+            SignatureType::EthereumAutodetect => write!(f, "EthereumAutodetect"),
             SignatureType::Ed25519 => write!(f, "Ed25519"),
             SignatureType::Custom(s) => write!(f, "Custom({})", s),
         }
@@ -42,52 +51,62 @@ impl fmt::Display for SignatureType {
 }
 
 /// Signature data structure
+#[cfg_attr(feature = "typeshare", typeshare::typeshare)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Signature {
     /// The signature type
     pub signature_type: SignatureType,
     /// The signature bytes (hex encoded for Ethereum, base58 for Solana)
     pub signature: String,
-    /// The public key or address that signed the message
-    pub signer: String,
-    /// Additional metadata for the signature
-    #[serde(default)]
-    pub metadata: std::collections::HashMap<String, String>,
+    /// Optional signer identity (e.g., authority pubkey on Solana, or account/contract on Ethereum)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
+    /// Optional metadata for chain-specific verification
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<HashMap<String, String>>,
 }
 
 impl Signature {
     /// Create a new signature
-    pub fn new(
-        signature_type: SignatureType,
-        signature: impl Into<String>,
-        signer: impl Into<String>,
-    ) -> Self {
+    pub fn new(signature_type: SignatureType, signature: impl Into<String>) -> Self {
         Self {
             signature_type,
             signature: signature.into(),
-            signer: signer.into(),
-            metadata: std::collections::HashMap::new(),
+            signer: None,
+            metadata: None,
         }
     }
 
     /// Create an EIP-191 signature
-    pub fn eip191(signature: impl Into<String>, signer: impl Into<String>) -> Self {
-        Self::new(SignatureType::Eip191, signature, signer)
+    pub fn eip191(signature: impl Into<String>) -> Self {
+        Self::new(SignatureType::Eip191, signature)
     }
 
     /// Create an EIP-1271 signature
-    pub fn eip1271(signature: impl Into<String>, signer: impl Into<String>) -> Self {
-        Self::new(SignatureType::Eip1271, signature, signer)
+    pub fn eip1271(signature: impl Into<String>) -> Self {
+        Self::new(SignatureType::Eip1271, signature)
     }
 
     /// Create an Ed25519 signature
-    pub fn ed25519(signature: impl Into<String>, signer: impl Into<String>) -> Self {
-        Self::new(SignatureType::Ed25519, signature, signer)
+    pub fn ed25519(signature: impl Into<String>) -> Self {
+        Self::new(SignatureType::Ed25519, signature)
     }
 
-    /// Add metadata to the signature
+    /// Create an Ethereum auto-detect signature (chooses EIP-191 vs EIP-1271 at verify time)
+    pub fn ethereum_autodetect(signature: impl Into<String>) -> Self {
+        Self::new(SignatureType::EthereumAutodetect, signature)
+    }
+
+    /// Optionally attach a signer identifier (e.g., Solana authority base58 or Ethereum address)
+    pub fn with_signer(mut self, signer: impl Into<String>) -> Self {
+        self.signer = Some(signer.into());
+        self
+    }
+
+    /// Optionally attach metadata entry (e.g., program_id, pda_seeds for Solana PDA verification)
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.metadata.insert(key.into(), value.into());
+        let map = self.metadata.get_or_insert_with(HashMap::new);
+        map.insert(key.into(), value.into());
         self
     }
 
@@ -96,6 +115,8 @@ impl Signature {
         match self.signature_type {
             SignatureType::Eip191 => self.validate_ethereum_eip191_format(),
             SignatureType::Eip1271 => self.validate_eip1271_format(),
+            // Allow generic hex for autodetect; specific constraints enforced during backend verification
+            SignatureType::EthereumAutodetect => self.validate_eip1271_format(),
             SignatureType::Ed25519 => self.validate_solana_format(),
             SignatureType::Custom(_) => Ok(()), // Custom types are not validated
         }
@@ -175,7 +196,7 @@ impl Signature {
     /// Get the signature as bytes
     pub fn as_bytes(&self) -> SiwxResult<Vec<u8>> {
         match self.signature_type {
-            SignatureType::Eip191 | SignatureType::Eip1271 => {
+            SignatureType::Eip191 | SignatureType::Eip1271 | SignatureType::EthereumAutodetect => {
                 // Remove 0x prefix and decode hex
                 let hex_part = self.signature.strip_prefix("0x").unwrap_or(&self.signature);
                 hex::decode(hex_part).map_err(|e| {
@@ -219,6 +240,9 @@ impl Signature {
             SignatureType::Eip1271 => Err(SiwxError::InvalidSignature(
                 "Recovery ID is not available for EIP-1271 signatures".into(),
             )),
+            SignatureType::EthereumAutodetect => Err(SiwxError::InvalidSignature(
+                "Recovery ID is not available for EthereumAutodetect signatures".into(),
+            )),
             _ => Err(SiwxError::InvalidSignature(
                 "Recovery ID only available for EIP-191 Ethereum signatures".into(),
             )),
@@ -242,6 +266,9 @@ impl Signature {
             SignatureType::Eip1271 => Err(SiwxError::InvalidSignature(
                 "R and S components are not available for EIP-1271 signatures".into(),
             )),
+            SignatureType::EthereumAutodetect => Err(SiwxError::InvalidSignature(
+                "R and S components only available for EthereumAutodetect signatures".into(),
+            )),
             _ => Err(SiwxError::InvalidSignature(
                 "R and S components only available for EIP-191 Ethereum signatures".into(),
             )),
@@ -251,50 +278,35 @@ impl Signature {
 
 impl fmt::Display for Signature {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "{} signature by {}: {}",
-            self.signature_type, self.signer, self.signature
-        )
+        write!(f, "{} signature: {}", self.signature_type, self.signature)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::utils::generate_mock_hex_string;
 
     #[test]
     fn test_signature_creation() {
-        let sig = Signature::eip191(
-            "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-            "0x1234567890123456789012345678901234567890",
-        );
+        let sig = Signature::eip191(generate_mock_hex_string(65, 0x00, true));
 
         assert_eq!(sig.signature_type, SignatureType::Eip191);
-        assert_eq!(sig.signer, "0x1234567890123456789012345678901234567890");
+        assert_eq!(sig.signature, generate_mock_hex_string(65, 0x00, true));
     }
 
     #[test]
     fn test_ethereum_signature_validation() {
         // Valid signature
-        let valid_sig = Signature::eip191(
-            "0x1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-            "0x1234567890123456789012345678901234567890",
-        );
+        let valid_sig = Signature::eip191(generate_mock_hex_string(65, 0x00, true));
         assert!(valid_sig.validate_format().is_ok());
 
         // Invalid signature (wrong length)
-        let invalid_sig = Signature::eip191(
-            "0x123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789",
-            "0x1234567890123456789012345678901234567890",
-        );
+        let invalid_sig = Signature::eip191(generate_mock_hex_string(66, 0x00, true));
         assert!(invalid_sig.validate_format().is_err());
 
         // Invalid signature (no 0x prefix)
-        let invalid_sig2 = Signature::eip191(
-            "1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890",
-            "0x1234567890123456789012345678901234567890",
-        );
+        let invalid_sig2 = Signature::eip191(generate_mock_hex_string(65, 0x00, false));
         assert!(invalid_sig2.validate_format().is_err());
     }
 
@@ -320,22 +332,22 @@ mod tests {
     #[test]
     fn test_eip1271_signature_format_validation() {
         // Valid: 0x-prefixed, even-length hex
-        let sig = Signature::eip1271("0x1234abcdef", "0x1234567890123456789012345678901234567890");
+        let sig = Signature::eip1271("0x1234abcdef");
         assert!(sig.validate_format().is_ok());
 
         // Invalid: not 0x-prefixed
-        let sig = Signature::eip1271("1234abcdef", "0x1234567890123456789012345678901234567890");
+        let sig = Signature::eip1271("1234abcdef");
         assert!(sig.validate_format().is_err());
 
         // Invalid: odd-length hex
-        let sig = Signature::eip1271("0x123", "0x1234567890123456789012345678901234567890");
+        let sig = Signature::eip1271("0x123");
         assert!(sig.validate_format().is_err());
     }
 
     #[test]
     fn test_helpers_error_on_eip1271() {
         // EIP-1271 signatures can be arbitrary length hex; ensure helpers error clearly
-        let sig = Signature::eip1271("0xdeadbeef", "0x1234567890123456789012345678901234567890");
+        let sig = Signature::eip1271("0xdeadbeef");
         let err1 = sig.recovery_id().unwrap_err();
         let err2 = sig.r_s_components().unwrap_err();
         match err1 {
