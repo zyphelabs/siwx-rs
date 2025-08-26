@@ -1,5 +1,3 @@
-#![cfg(feature = "ethereum")]
-
 use crate::{
     verifier::SignatureVerifierBackend, Chain, Signature, SignatureType, SiwxError, SiwxMessage,
     SiwxResult,
@@ -168,7 +166,7 @@ mod tests {
         // Build SIWX message referencing the signer address
         let message = crate::SiwxMessage::new(
             "example.com",
-            &format!("0x{:x}", signer.address()),
+            format!("0x{:x}", signer.address()),
             "https://example.com/login",
             "1",
             "2024-01-01T00:00:00Z",

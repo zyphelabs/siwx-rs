@@ -4,6 +4,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use std::str::FromStr;
 use uuid::Uuid;
 
 /// SIWX message following EIP-4361 standard
@@ -409,6 +410,169 @@ impl Default for SiwxMessage {
     }
 }
 
+impl FromStr for SiwxMessage {
+    type Err = SiwxError;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        // Helper to get next line safely
+        fn next_line<'a>(
+            lines: &mut std::iter::Peekable<std::str::Lines<'a>>,
+        ) -> Result<&'a str, SiwxError> {
+            lines
+                .next()
+                .ok_or_else(|| SiwxError::InvalidMessageFormat("Unexpected end of message".into()))
+        }
+
+        let mut lines = input.lines().peekable();
+
+        // Header: "<domain> wants you to sign in with your <Chain> account:"
+        let header = next_line(&mut lines)?;
+        let wants_marker = " wants you to sign in with your ";
+        let account_suffix = " account:";
+        let (domain, chain_label) = {
+            let domain_end = header.find(wants_marker).ok_or_else(|| {
+                SiwxError::InvalidMessageFormat("Invalid header: missing marker".into())
+            })?;
+            let domain = &header[..domain_end];
+            let after = &header[domain_end + wants_marker.len()..];
+            let chain_end = after.rfind(account_suffix).ok_or_else(|| {
+                SiwxError::InvalidMessageFormat("Invalid header: missing account suffix".into())
+            })?;
+            let chain = &after[..chain_end];
+            (domain.trim().to_string(), chain.trim().to_string())
+        };
+
+        // Address line
+        let address = next_line(&mut lines)?.trim().to_string();
+
+        // Expect a blank line
+        let maybe_blank = next_line(&mut lines)?;
+        if !maybe_blank.trim().is_empty() {
+            return Err(SiwxError::InvalidMessageFormat(
+                "Expected blank line after address".into(),
+            ));
+        }
+
+        // Optional statement (single-line), followed by a blank line
+        let mut statement: Option<String> = None;
+        if let Some(&peek) = lines.peek() {
+            if !(peek.starts_with("URI:")
+                || peek.starts_with("Version:")
+                || peek.starts_with("Chain ID:")
+                || peek.starts_with("Nonce:")
+                || peek.starts_with("Issued At:")
+                || peek.starts_with("Expiration Time:")
+                || peek.starts_with("Not Before:")
+                || peek.starts_with("Request ID:")
+                || peek.starts_with("Resources:"))
+            {
+                // Treat as statement
+                let stmt_line = next_line(&mut lines)?;
+                statement = Some(stmt_line.to_string());
+
+                // The generator adds a blank line after the statement
+                let after_stmt_blank = next_line(&mut lines)?;
+                if !after_stmt_blank.trim().is_empty() {
+                    return Err(SiwxError::InvalidMessageFormat(
+                        "Expected blank line after statement".into(),
+                    ));
+                }
+            }
+        }
+
+        // Parse key/value lines
+        let mut resources: Option<Vec<String>> = None;
+
+        // Helper to parse a prefixed line
+        let mut parse_prefixed = |prefix: &str| -> Option<String> {
+            if let Some(&line) = lines.peek() {
+                if let Some(rest) = line.strip_prefix(prefix) {
+                    let _ = lines.next();
+                    return Some(rest.trim().to_string());
+                }
+            }
+            None
+        };
+
+        // Required in this order per generator output
+        let uri = parse_prefixed("URI: ");
+        let version = parse_prefixed("Version: ");
+        let chain_id = if let Some(cid_str) = parse_prefixed("Chain ID: ") {
+            Some(cid_str.parse::<u64>().map_err(|_| {
+                SiwxError::InvalidMessageFormat("Chain ID must be a positive integer".into())
+            })?)
+        } else {
+            None
+        };
+        let nonce = parse_prefixed("Nonce: ");
+        let issued_at = parse_prefixed("Issued At: ");
+
+        // Optional fields in the same order
+        let expiration_time = parse_prefixed("Expiration Time: ");
+        let not_before = parse_prefixed("Not Before: ");
+        let request_id = parse_prefixed("Request ID: ");
+
+        // Resources block
+        if let Some(&line) = lines.peek() {
+            if line.trim() == "Resources:" {
+                let _ = lines.next();
+                let mut list = Vec::new();
+                while let Some(&res_line) = lines.peek() {
+                    if let Some(item) = res_line.strip_prefix("- ") {
+                        let _ = lines.next();
+                        list.push(item.trim().to_string());
+                    } else {
+                        break;
+                    }
+                }
+                resources = Some(list);
+            }
+        }
+
+        // Ensure required fields are present
+        let uri = uri.ok_or_else(|| SiwxError::InvalidMessageFormat("Missing URI".into()))?;
+        let version =
+            version.ok_or_else(|| SiwxError::InvalidMessageFormat("Missing Version".into()))?;
+        let chain_id =
+            chain_id.ok_or_else(|| SiwxError::InvalidMessageFormat("Missing Chain ID".into()))?;
+        let nonce = nonce.ok_or_else(|| SiwxError::InvalidMessageFormat("Missing Nonce".into()))?;
+        let issued_at =
+            issued_at.ok_or_else(|| SiwxError::InvalidMessageFormat("Missing Issued At".into()))?;
+
+        // Optionally, ensure header chain label broadly matches chain_id family (best-effort)
+        let header_ok = match chain_label.as_str() {
+            "Ethereum" => matches!(chain_id, 1 | 11155111),
+            "Solana" => matches!(chain_id, 101 | 102),
+            _ => true,
+        };
+        if !header_ok {
+            return Err(SiwxError::InvalidMessageFormat(
+                "Header chain does not match Chain ID".into(),
+            ));
+        }
+
+        let msg = SiwxMessage {
+            domain,
+            address,
+            statement,
+            uri,
+            version,
+            chain_id,
+            nonce,
+            issued_at,
+            expiration_time,
+            not_before,
+            request_id,
+            resources,
+            chain_specific: HashMap::new(),
+        };
+
+        // Run validations to normalize errors
+        msg.validate()?;
+        Ok(msg)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,5 +668,52 @@ mod tests {
 
         assert!(expired_message.is_expired().unwrap());
         assert!(!future_message.is_expired().unwrap());
+    }
+
+    #[test]
+    fn test_parse_plaintext_ethereum() {
+        let message = SiwxMessage::new(
+            "example.com",
+            "0x1234567890123456789012345678901234567890",
+            "https://example.com/login",
+            "1",
+            "2024-01-01T00:00:00Z",
+            "nonce123",
+        )
+        .with_statement("Sign in to Example App")
+        .with_expiration_time("2024-01-01T01:00:00Z");
+
+        let text = message.message_to_sign().unwrap();
+        let parsed: SiwxMessage = text.parse().unwrap();
+
+        assert_eq!(parsed.domain, message.domain);
+        assert_eq!(parsed.address, message.address);
+        assert_eq!(parsed.statement, message.statement);
+        assert_eq!(parsed.uri, message.uri);
+        assert_eq!(parsed.version, message.version);
+        assert_eq!(parsed.chain_id, message.chain_id);
+        assert_eq!(parsed.nonce, message.nonce);
+        assert_eq!(parsed.issued_at, message.issued_at);
+        assert_eq!(parsed.expiration_time, message.expiration_time);
+    }
+
+    #[test]
+    fn test_parse_plaintext_solana() {
+        let message = SiwxMessage::new_with_chain(
+            "example.com",
+            "11111111111111111111111111111112",
+            "https://example.com/login",
+            "1",
+            "2024-01-01T00:00:00Z",
+            "nonce123",
+            Chain::Solana,
+        );
+
+        let text = message.message_to_sign().unwrap();
+        let parsed: SiwxMessage = text.parse().unwrap();
+
+        assert_eq!(parsed.domain, message.domain);
+        assert_eq!(parsed.address, message.address);
+        assert_eq!(parsed.chain_id, message.chain_id);
     }
 }
