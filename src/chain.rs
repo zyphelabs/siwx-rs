@@ -3,9 +3,10 @@ use std::fmt;
 
 /// Supported blockchain networks
 #[cfg_attr(feature = "typeshare", typeshare::typeshare)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum Chain {
     /// Ethereum mainnet
+    #[default]
     Ethereum,
     /// Ethereum testnets (Goerli, Sepolia, etc.)
     EthereumTestnet,
@@ -69,11 +70,7 @@ impl fmt::Display for Chain {
     }
 }
 
-impl Default for Chain {
-    fn default() -> Self {
-        Chain::Ethereum
-    }
-}
+ 
 
 #[cfg(test)]
 mod tests {

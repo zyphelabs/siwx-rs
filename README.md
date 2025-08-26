@@ -88,6 +88,28 @@ async fn main() -> SiwxResult<()> {
 }
 ```
 
+### Parsing plaintext EIP-4361 messages
+
+```rust
+use siwx_rs::prelude::*;
+use std::str::FromStr;
+
+let plaintext = r#"example.com wants you to sign in with your Ethereum account:
+0x1234567890123456789012345678901234567890
+
+Sign in to Example App
+
+URI: https://example.com/login
+Version: 1
+Chain ID: 1
+Nonce: 12345678-1234-1234-1234-123456789012
+Issued At: 2024-01-01T00:00:00Z
+"#;
+
+let msg = SiwxMessage::from_str(plaintext)?; // or: let msg: SiwxMessage = plaintext.parse()?;
+msg.validate()?; // optional
+```
+
 ### Ethereum Example
 
 ```rust

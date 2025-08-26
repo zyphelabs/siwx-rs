@@ -1,5 +1,3 @@
-#![cfg(feature = "solana")]
-
 use crate::{
     verifier::SignatureVerifierBackend, Chain, Signature, SignatureType, SiwxError, SiwxMessage,
     SiwxResult,
@@ -152,8 +150,8 @@ mod tests {
 
     fn signing_key_from_tag(tag: u8) -> SigningKey {
         let mut seed = [0u8; 32];
-        for i in 0..32 {
-            seed[i] = tag.wrapping_add(i as u8);
+        for (i, b) in seed.iter_mut().enumerate() {
+            *b = tag.wrapping_add(i as u8);
         }
         SigningKey::from_bytes(&seed)
     }
