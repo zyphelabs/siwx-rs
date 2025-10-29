@@ -10,7 +10,6 @@ keywords = [
     "blockchain",
     "ethereum",
     "solana",
-    "siwx",
     "eip-4361",
 ]
 categories = ["authentication", "cryptography"]
