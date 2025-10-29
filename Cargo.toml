@@ -3,7 +3,7 @@ name = "siwx-rs"
 version = "0.2.2"
 edition = "2021"
 description = "Multi-chain Sign-In with X (SIWX) library supporting Ethereum and Solana"
-license = "Apache 2.0"
+license = "Apache-2.0"
 repository = "https://github.com/zyphelabs/siwx-rs"
 keywords = [
     "authentication",
